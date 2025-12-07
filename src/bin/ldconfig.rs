@@ -1,0 +1,308 @@
+use bpaf::Bpaf;
+use camino::Utf8PathBuf;
+use ldconfig::{
+    build_cache, expand_includes, parse_config_file, parse_elf_file, update_symlinks, Config,
+    ElfLibrary, LdconfigError,
+};
+
+#[derive(Debug, Clone, Bpaf)]
+#[bpaf(options)]
+struct Options {
+    #[bpaf(short, long)]
+    /// Verbose output
+    verbose: bool,
+
+    #[bpaf(short, long)]
+    /// Dry run - don't make changes
+    dry_run: bool,
+
+    #[bpaf(short, long, argument("PREFIX"), fallback("/".into()))]
+    /// Use alternative root prefix (like chroot)
+    prefix: Utf8PathBuf,
+
+    #[bpaf(short, long, argument("CONFIG"))]
+    /// Use alternative config file
+    config_file: Option<Utf8PathBuf>,
+}
+
+fn main() -> Result<(), LdconfigError> {
+    let options = options().run();
+
+    if options.verbose {
+        println!("Using prefix: {}", options.prefix);
+    }
+
+    // Determine config file path
+    let config_path = if let Some(custom_config) = &options.config_file {
+        if options.verbose {
+            println!("Using custom config file: {}", custom_config);
+        }
+        custom_config.clone()
+    } else {
+        let default_config_path = options.prefix.join("etc/ld.so.conf");
+        if options.verbose {
+            println!("Looking for config file at: {}", default_config_path);
+        }
+        default_config_path
+    };
+
+    // Load configuration
+    let mut config = if config_path.exists() {
+        if options.verbose {
+            println!("Loading configuration from: {}", config_path);
+        }
+        parse_config_file(&config_path)?
+    } else {
+        if options.verbose {
+            println!("No config file found, using default configuration");
+        }
+        Config::default()
+    };
+
+    // Apply prefix to all directories in config
+    config.directories = config
+        .directories
+        .into_iter()
+        .map(|path: Utf8PathBuf| {
+            if path.is_absolute() {
+                options.prefix.join(path.strip_prefix("/").unwrap_or(&path))
+            } else {
+                options.prefix.join(path)
+            }
+        })
+        .collect();
+
+    if options.verbose {
+        println!(
+            "Directories after prefix application: {:?}",
+            config.directories
+        );
+    }
+
+    // Handle include patterns
+    if !config.include_patterns.is_empty() {
+        if options.verbose {
+            println!("Include patterns: {:?}", config.include_patterns);
+        }
+
+        // Create a temporary config with prefixed include patterns
+        let mut temp_config = config.clone();
+        temp_config.include_patterns = temp_config
+            .include_patterns
+            .into_iter()
+            .map(|pattern| {
+                // Apply prefix to the pattern
+                if pattern.starts_with("/") {
+                    options
+                        .prefix
+                        .join(pattern.strip_prefix("/").unwrap_or(&pattern))
+                        .to_string()
+                } else {
+                    options.prefix.join(pattern).to_string()
+                }
+            })
+            .collect();
+
+        if options.verbose {
+            println!(
+                "Prefixed include patterns: {:?}",
+                temp_config.include_patterns
+            );
+        }
+
+        // Expand includes (they're already prefixed)
+        let expanded_dirs = expand_includes(&temp_config)?;
+        if options.verbose {
+            println!("Expanded dirs: {:?}", expanded_dirs);
+        }
+
+        // Replace directories with expanded ones and apply prefix
+        config.directories = expanded_dirs
+            .into_iter()
+            .map(|path: Utf8PathBuf| {
+                if path.is_absolute() {
+                    options.prefix.join(path.strip_prefix("/").unwrap_or(&path))
+                } else {
+                    options.prefix.join(path)
+                }
+            })
+            .collect();
+        if options.verbose {
+            println!(
+                "Directories after include expansion: {:?}",
+                config.directories
+            );
+        }
+    }
+
+    let scan_dirs = config.directories.clone();
+
+    if options.verbose {
+        println!("Scanning directories: {:?}", scan_dirs);
+    }
+
+    // Scan for libraries
+    let mut libraries = scan_libraries(&scan_dirs)?;
+
+    if options.verbose {
+        println!("Found {} base libraries", libraries.len());
+    }
+
+    // Scan hwcap subdirectories for optimized library variants
+    let hwcap_libraries = scan_hwcap_directories(&scan_dirs)?;
+    if options.verbose && !hwcap_libraries.is_empty() {
+        println!("Found {} hwcap-optimized libraries", hwcap_libraries.len());
+    }
+    libraries.extend(hwcap_libraries);
+
+    if options.verbose {
+        println!("Total libraries (including hwcap variants): {}", libraries.len());
+    }
+
+    // Deduplicate libraries by SONAME, keeping only unique entries
+    // The real ldconfig keeps multiple entries for the same SONAME if they
+    // come from different directories, but we need to deduplicate within
+    // the same directory to avoid redundant entries.
+    let unique_libraries = deduplicate_libraries(&libraries);
+
+    if options.verbose {
+        println!("After deduplication: {} unique libraries", unique_libraries.len());
+    }
+
+    // Build cache with prefix for path stripping
+    let cache = build_cache(&unique_libraries, Some(options.prefix.as_path()));
+
+    if options.verbose {
+        println!("Built cache with {} bytes", cache.len());
+        println!("Cache magic: {}", String::from_utf8_lossy(&cache[..20]));
+    }
+
+    if !options.dry_run {
+        // Determine cache file path
+        let cache_path = options.prefix.join("etc/ld.so.cache");
+
+        // Ensure parent directory exists
+        if let Some(parent) = cache_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        // Write cache file
+        let mut file = std::fs::File::create(&cache_path)?;
+        use std::io::Write;
+        file.write_all(&cache)?;
+        file.flush()?;
+        file.sync_all()?;
+
+        if options.verbose {
+            println!("Wrote {} bytes to {}", cache.len(), cache_path);
+        }
+
+        // Update symlinks
+        for dir in &scan_dirs {
+            if let Ok(actions) = update_symlinks(dir.as_std_path(), &libraries, options.dry_run) {
+                if options.verbose && !actions.is_empty() {
+                    println!("Symlink actions in {}:", dir);
+                    for action in actions {
+                        println!("  {} -> {}", action.link, action.target);
+                    }
+                }
+            }
+        }
+    } else if options.verbose {
+        println!("Dry run: would write {} entries to cache", libraries.len());
+    }
+
+    Ok(())
+}
+
+/// Deduplicate libraries keeping one entry per (SONAME, canonical_directory) pair.
+/// Canonicalization ensures that symlinked directories (like lib64 -> lib) are treated as the same.
+fn deduplicate_libraries(libraries: &[ElfLibrary]) -> Vec<ElfLibrary> {
+    use std::collections::HashMap;
+
+    let mut unique_libs: HashMap<(String, Utf8PathBuf), ElfLibrary> = HashMap::new();
+
+    for lib in libraries {
+        let dir = lib.path.parent().unwrap_or_else(|| "".as_ref());
+
+        // Canonicalize directory to handle symlinks (lib64 -> lib)
+        let canonical_dir = if let Ok(canon) = dir.as_std_path().canonicalize() {
+            Utf8PathBuf::try_from(canon).unwrap_or_else(|_| dir.to_owned())
+        } else {
+            dir.to_owned()
+        };
+
+        let key = (lib.soname.clone(), canonical_dir);
+
+        // Keep first occurrence per (SONAME, canonical_directory) pair
+        unique_libs.entry(key).or_insert_with(|| lib.clone());
+    }
+
+    unique_libs.into_values().collect()
+}
+
+fn scan_hwcap_directories(dirs: &[Utf8PathBuf]) -> Result<Vec<ElfLibrary>, LdconfigError> {
+    use ldconfig::detect_hwcap_dirs;
+
+    let mut hwcap_libraries = Vec::new();
+
+    for dir in dirs {
+        if !dir.exists() {
+            continue;
+        }
+
+        // Detect hwcap subdirectories (e.g., /lib/x86-64-v3/, /lib/haswell/)
+        let hwcap_dirs = detect_hwcap_dirs(dir.as_std_path())?;
+
+        for (hwcap_path, hwcap) in hwcap_dirs {
+            for entry in std::fs::read_dir(&hwcap_path)? {
+                let entry = entry?;
+                let path = entry.path();
+
+                if path.is_file() && should_scan_library(&path) {
+                    if let Ok(mut lib) = parse_elf_file(&path) {
+                        // Override hwcap from path detection with proper architecture-aware value
+                        let arch = lib.arch;
+                        lib.hwcap = Some(hwcap.to_bitmask(arch));
+                        hwcap_libraries.push(lib);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(hwcap_libraries)
+}
+
+fn scan_libraries(dirs: &[Utf8PathBuf]) -> Result<Vec<ElfLibrary>, LdconfigError> {
+    let mut libraries = Vec::new();
+
+    for dir in dirs {
+        if !dir.exists() {
+            continue;
+        }
+
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+
+            if path.is_file() && should_scan_library(&path) {
+                if let Ok(lib) = parse_elf_file(&path) {
+                    libraries.push(lib);
+                }
+            }
+        }
+    }
+
+    Ok(libraries)
+}
+
+fn should_scan_library(path: &std::path::Path) -> bool {
+    // Check if this looks like a shared library
+    if let Some(ext) = path.extension() {
+        if ext == "so" || path.file_name().unwrap().to_string_lossy().contains(".so.") {
+            return true;
+        }
+    }
+    false
+}
