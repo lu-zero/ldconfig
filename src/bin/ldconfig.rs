@@ -89,20 +89,24 @@ fn main() -> Result<(), LdconfigError> {
             println!("Include patterns: {:?}", config.include_patterns);
         }
 
-        // Create a temporary config with prefixed include patterns
+        // Resolve include patterns relative to config file directory
+        let config_dir = config_path.parent().unwrap_or_else(|| "/etc".as_ref());
+
         let mut temp_config = config.clone();
         temp_config.include_patterns = temp_config
             .include_patterns
             .into_iter()
             .map(|pattern| {
-                // Apply prefix to the pattern
+                // Relative patterns are relative to config file directory
                 if pattern.starts_with("/") {
+                    // Absolute pattern - just apply prefix
                     options
                         .prefix
                         .join(pattern.strip_prefix("/").unwrap_or(&pattern))
                         .to_string()
                 } else {
-                    options.prefix.join(pattern).to_string()
+                    // Relative pattern - resolve relative to config directory
+                    config_dir.join(pattern).to_string()
                 }
             })
             .collect();
@@ -114,14 +118,14 @@ fn main() -> Result<(), LdconfigError> {
             );
         }
 
-        // Expand includes (they're already prefixed)
+        // Expand includes
         let expanded_dirs = expand_includes(&temp_config)?;
         if options.verbose {
             println!("Expanded dirs: {:?}", expanded_dirs);
         }
 
-        // Replace directories with expanded ones and apply prefix
-        config.directories = expanded_dirs
+        // ADD expanded directories to existing ones (don't replace!)
+        let additional_dirs: Vec<Utf8PathBuf> = expanded_dirs
             .into_iter()
             .map(|path: Utf8PathBuf| {
                 if path.is_absolute() {
@@ -131,6 +135,9 @@ fn main() -> Result<(), LdconfigError> {
                 }
             })
             .collect();
+
+        config.directories.extend(additional_dirs);
+
         if options.verbose {
             println!(
                 "Directories after include expansion: {:?}",
