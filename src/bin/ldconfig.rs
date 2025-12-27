@@ -20,7 +20,11 @@ struct Options {
     /// Use alternative root prefix (like chroot)
     prefix: Utf8PathBuf,
 
-    #[bpaf(short, long, argument("CONFIG"))]
+    #[bpaf(short('C'), long, argument("CACHE"))]
+    /// Write the file to this path
+    cache: Option<Utf8PathBuf>,
+
+    #[bpaf(short('c'), long, argument("CONFIG"))]
     /// Use alternative config file
     config_file: Option<Utf8PathBuf>,
 }
@@ -156,7 +160,10 @@ fn main() -> Result<(), LdconfigError> {
     libraries.extend(hwcap_libraries);
 
     if options.verbose {
-        println!("Total libraries (including hwcap variants): {}", libraries.len());
+        println!(
+            "Total libraries (including hwcap variants): {}",
+            libraries.len()
+        );
     }
 
     // Deduplicate libraries by SONAME, keeping only unique entries
@@ -166,7 +173,10 @@ fn main() -> Result<(), LdconfigError> {
     let unique_libraries = deduplicate_libraries(&libraries);
 
     if options.verbose {
-        println!("After deduplication: {} unique libraries", unique_libraries.len());
+        println!(
+            "After deduplication: {} unique libraries",
+            unique_libraries.len()
+        );
     }
 
     // Build cache with prefix for path stripping
@@ -179,7 +189,10 @@ fn main() -> Result<(), LdconfigError> {
 
     if !options.dry_run {
         // Determine cache file path
-        let cache_path = options.prefix.join("etc/ld.so.cache");
+        let cache_path = options.cache.map_or_else(
+            || options.prefix.join("etc/ld.so.cache"),
+            |c| c.to_path_buf(),
+        );
 
         // Ensure parent directory exists
         if let Some(parent) = cache_path.parent() {
