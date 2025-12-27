@@ -40,18 +40,39 @@ pub fn build_cache(libraries: &[ElfLibrary], prefix: Option<&Utf8Path>) -> Vec<u
     let len_strings_pos = cache.len();
     cache.extend_from_slice(&0u32.to_le_bytes());
 
-    // Header: unused (16 bytes) - padding to make header exactly 44 bytes
-    cache.extend_from_slice(&[0u8; 16]);
+    // Header: flags (1 byte) - endianness flag
+    // Values: 0 = unset, 1 = invalid, 2 = little endian, 3 = big endian
+    let flags: u8 = if cfg!(target_endian = "little") { 2 } else { 3 };
+    cache.push(flags);
 
-    // Build string table
+    // Header: padding (3 bytes) - alignment
+    cache.extend_from_slice(&[0u8; 3]);
+
+    // Header: extension_offset (4 bytes) - offset to extension section (0 = no extensions)
+    cache.extend_from_slice(&0u32.to_le_bytes());
+
+    // Header: unused[3] (12 bytes) - actual unused padding
+    cache.extend_from_slice(&[0u8; 12]);
+
+    // Sort libraries FIRST before building anything
+    // Primary: SONAME alphabetical
+    // Secondary: hwcap priority (higher hwcap = more specialized, comes first)
+    let mut sorted_libs = libraries.to_vec();
+    sorted_libs.sort_by(|a, b| {
+        match a.soname.cmp(&b.soname) {
+            std::cmp::Ordering::Equal => {
+                // Higher hwcap comes first (more specialized)
+                b.hwcap.unwrap_or(0).cmp(&a.hwcap.unwrap_or(0))
+            }
+            other => other,
+        }
+    });
+
+    // Build string table from SORTED libraries
     let mut string_table = Vec::new();
-    // Start with null bytes like the real ld.so.cache
-    string_table.extend_from_slice(&[0u8; 4]);
-
     let mut string_offsets = HashMap::new();
 
-    // Add SONAMEs and paths to string table
-    for lib in libraries {
+    for lib in &sorted_libs {
         add_string(&mut string_table, &mut string_offsets, &lib.soname);
 
         // Convert the path to an absolute path for the cache
@@ -70,26 +91,16 @@ pub fn build_cache(libraries: &[ElfLibrary], prefix: Option<&Utf8Path>) -> Vec<u
         add_string(&mut string_table, &mut string_offsets, &path_to_add);
     }
 
-    // Sort libraries for consistent cache and optimized lookup
-    // Primary: SONAME alphabetical
-    // Secondary: hwcap priority (higher hwcap = more specialized, comes first)
-    let mut sorted_libs = libraries.to_vec();
-    sorted_libs.sort_by(|a, b| {
-        match a.soname.cmp(&b.soname) {
-            std::cmp::Ordering::Equal => {
-                // Higher hwcap comes first (more specialized)
-                b.hwcap.unwrap_or(0).cmp(&a.hwcap.unwrap_or(0))
-            }
-            other => other,
-        }
-    });
+    // Calculate where string table will be in the final file
+    // Header = 48 bytes, entries = nlibs * 24 bytes
+    let string_table_file_offset = 48 + (sorted_libs.len() * 24);
 
     // Build entries
-    // Note: header_size = 44, entry_size = 24 for reference
+    // Note: header_size = 48, entry_size = 24 for reference
 
     for lib in &sorted_libs {
-        // Look up string offsets for SONAME and path
-        let key_offset = *string_offsets.get(&lib.soname).unwrap_or_else(|| {
+        // Look up string offsets for SONAME and path (these are relative to string table start)
+        let key_relative_offset = *string_offsets.get(&lib.soname).unwrap_or_else(|| {
             eprintln!(
                 "WARNING: SONAME '{}' not found in string offsets map!",
                 lib.soname
@@ -108,13 +119,17 @@ pub fn build_cache(libraries: &[ElfLibrary], prefix: Option<&Utf8Path>) -> Vec<u
             lib.path.to_string()
         };
 
-        let value_offset = *string_offsets.get(&path_to_add).unwrap_or_else(|| {
+        let value_relative_offset = *string_offsets.get(&path_to_add).unwrap_or_else(|| {
             eprintln!(
                 "WARNING: PATH '{}' not found in string offsets map!",
                 path_to_add
             );
             &0u32
         });
+
+        // Convert to ABSOLUTE file offsets (glibc expects absolute offsets)
+        let key_offset = (string_table_file_offset as u32) + key_relative_offset;
+        let value_offset = (string_table_file_offset as u32) + value_relative_offset;
 
         // Calculate flags using glibc ldconfig.h constants
         let flags = match lib.arch {
@@ -159,7 +174,7 @@ pub fn build_cache(libraries: &[ElfLibrary], prefix: Option<&Utf8Path>) -> Vec<u
     cache.extend_from_slice(&string_table);
 
     // Update placeholders
-    let nlibs = libraries.len() as u32;
+    let nlibs = sorted_libs.len() as u32;
     let len_strings = string_table.len() as u32;
 
     cache[nlibs_pos..nlibs_pos + 4].copy_from_slice(&nlibs.to_le_bytes());

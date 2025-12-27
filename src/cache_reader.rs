@@ -46,7 +46,7 @@ pub fn parse_cache_data(data: &[u8]) -> Result<CacheInfo, LdconfigError> {
 
     // Parse entries
     let mut entries = Vec::new();
-    let header_size = 44; // 20 (magic) + 4 (nlibs) + 4 (len_strings) + 20 (unused)
+    let header_size = 48; // 20 (magic) + 4 (nlibs) + 4 (len_strings) + 20 (unused)
     let entry_size = 24; // 4 + 4 + 4 + 4 + 8 (no padding) - matches ld-so-cache format
 
     for i in 0..nlibs {
