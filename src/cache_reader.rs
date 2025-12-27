@@ -23,6 +23,7 @@ pub struct CacheInfo {
     pub header: CacheHeader,
     pub entries: Vec<CacheEntry>,
     pub string_table: Vec<String>,
+    pub generator: Option<String>,
 }
 
 pub fn read_cache_file(path: &Path) -> Result<CacheInfo, LdconfigError> {
@@ -112,9 +113,66 @@ pub fn parse_cache_data(data: &[u8]) -> Result<CacheInfo, LdconfigError> {
         }
     }
 
+    // Parse extension section
+    let extension_offset = u32::from_le_bytes([data[32], data[33], data[34], data[35]]) as usize;
+    let mut generator = None;
+
+    if extension_offset > 0 && extension_offset + 24 <= data.len() {
+        // Check extension magic: 0xEAA42174
+        let ext_magic = u32::from_le_bytes([
+            data[extension_offset],
+            data[extension_offset + 1],
+            data[extension_offset + 2],
+            data[extension_offset + 3],
+        ]);
+
+        if ext_magic == 0xEAA42174 {
+            let ext_count = u32::from_le_bytes([
+                data[extension_offset + 4],
+                data[extension_offset + 5],
+                data[extension_offset + 6],
+                data[extension_offset + 7],
+            ]);
+
+            // Parse extension sections
+            for i in 0..ext_count as usize {
+                let section_offset = extension_offset + 8 + (i * 16);
+                if section_offset + 16 <= data.len() {
+                    let tag = u32::from_le_bytes([
+                        data[section_offset],
+                        data[section_offset + 1],
+                        data[section_offset + 2],
+                        data[section_offset + 3],
+                    ]);
+                    let data_offset = u32::from_le_bytes([
+                        data[section_offset + 8],
+                        data[section_offset + 9],
+                        data[section_offset + 10],
+                        data[section_offset + 11],
+                    ]) as usize;
+                    let data_size = u32::from_le_bytes([
+                        data[section_offset + 12],
+                        data[section_offset + 13],
+                        data[section_offset + 14],
+                        data[section_offset + 15],
+                    ]) as usize;
+
+                    // Tag 0 = generator
+                    if tag == 0 && data_offset + data_size <= data.len() {
+                        generator = Some(
+                            String::from_utf8_lossy(&data[data_offset..data_offset + data_size])
+                                .to_string(),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     Ok(CacheInfo {
         header,
         entries,
         string_table: strings,
+        generator,
     })
 }

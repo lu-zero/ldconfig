@@ -173,12 +173,50 @@ pub fn build_cache(libraries: &[ElfLibrary], prefix: Option<&Utf8Path>) -> Vec<u
     // Append string table
     cache.extend_from_slice(&string_table);
 
-    // Update placeholders
+    // Add padding to align extension section to 4 bytes
+    // glibc requires extension_offset to be 4-byte aligned
+    while cache.len() % 4 != 0 {
+        cache.push(0);
+    }
+
+    // Add extension section with generator information
+    let extension_offset = cache.len() as u32;
+
+    // Extension magic: 0xEAA42174 = (uint32_t)-358342284
+    const EXTENSION_MAGIC: u32 = 0xEAA42174;
+    cache.extend_from_slice(&EXTENSION_MAGIC.to_le_bytes());
+
+    // Extension directory header: count of extensions
+    cache.extend_from_slice(&1u32.to_le_bytes()); // 1 extension
+
+    // Calculate where the generator data will be
+    // Extension directory = 4 (magic) + 4 (count) + 16 (section descriptor)
+    let generator_data_offset = extension_offset + 4 + 4 + 16;
+
+    // Generator string (include version from Cargo.toml)
+    let generator = format!("ldconfig-rs {}", env!("CARGO_PKG_VERSION"));
+    let generator_bytes = generator.as_bytes();
+
+    // Extension section descriptor
+    // Note: glibc uses tag=0 for generator (cache_extension_tag_generator enum starts at 0)
+    cache.extend_from_slice(&0u32.to_le_bytes());  // tag: 0 (cache_extension_tag_generator)
+    cache.extend_from_slice(&0u32.to_le_bytes());  // flags: 0
+    cache.extend_from_slice(&generator_data_offset.to_le_bytes()); // offset to data
+    cache.extend_from_slice(&(generator_bytes.len() as u32).to_le_bytes()); // size of data
+
+    // Append the actual generator string (null-terminated)
+    cache.extend_from_slice(generator_bytes);
+    cache.push(0); // null terminator
+
+    // Update placeholders in header
     let nlibs = sorted_libs.len() as u32;
     let len_strings = string_table.len() as u32;
 
     cache[nlibs_pos..nlibs_pos + 4].copy_from_slice(&nlibs.to_le_bytes());
     cache[len_strings_pos..len_strings_pos + 4].copy_from_slice(&len_strings.to_le_bytes());
+
+    // Update extension_offset in header (at offset 32)
+    cache[32..36].copy_from_slice(&extension_offset.to_le_bytes());
 
     cache
 }
