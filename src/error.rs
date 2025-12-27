@@ -19,6 +19,9 @@ pub enum LdconfigError {
     #[error("Cache write error: {0}")]
     CacheWrite(String),
 
+    #[error("Cache read error: {0}")]
+    CacheRead(String),
+
     #[error("Symlink error: {0}")]
     Symlink(String),
 

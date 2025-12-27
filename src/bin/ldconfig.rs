@@ -1,8 +1,8 @@
 use bpaf::Bpaf;
 use camino::Utf8PathBuf;
 use ldconfig::{
-    build_cache, expand_includes, parse_config_file, parse_elf_file, update_symlinks, Config,
-    ElfLibrary, LdconfigError,
+    build_cache, expand_includes, parse_cache_data, parse_config_file, parse_elf_file,
+    update_symlinks, Config, ElfLibrary, LdconfigError,
 };
 
 #[derive(Debug, Clone, Bpaf)]
@@ -16,12 +16,16 @@ struct Options {
     /// Dry run - don't make changes
     dry_run: bool,
 
+    #[bpaf(short, long)]
+    /// Print cache contents
+    print_cache: bool,
+
     #[bpaf(short, long, argument("PREFIX"), fallback("/".into()))]
     /// Use alternative root prefix (like chroot)
     prefix: Utf8PathBuf,
 
     #[bpaf(short('C'), long, argument("CACHE"))]
-    /// Write the file to this path
+    /// Use cache file path
     cache: Option<Utf8PathBuf>,
 
     #[bpaf(short('c'), long, argument("CONFIG"))]
@@ -31,6 +35,11 @@ struct Options {
 
 fn main() -> Result<(), LdconfigError> {
     let options = options().run();
+
+    // Handle print-cache flag
+    if options.print_cache {
+        return print_cache(&options);
+    }
 
     if options.verbose {
         println!("Using prefix: {}", options.prefix);
@@ -230,6 +239,79 @@ fn main() -> Result<(), LdconfigError> {
         }
     } else if options.verbose {
         println!("Dry run: would write {} entries to cache", libraries.len());
+    }
+
+    Ok(())
+}
+
+fn print_cache(options: &Options) -> Result<(), LdconfigError> {
+    // Determine cache file path
+    let cache_path = options.cache.clone().unwrap_or_else(|| {
+        options.prefix.join("etc/ld.so.cache")
+    });
+
+    // Read and parse cache
+    let data = std::fs::read(&cache_path)
+        .map_err(|e| LdconfigError::CacheWrite(format!("Failed to read cache: {}", e)))?;
+
+    let cache_info = parse_cache_data(&data)?;
+
+    // Print header
+    println!(
+        "{} libs found in cache `{}'",
+        cache_info.entries.len(),
+        cache_path
+    );
+
+    // Helper function to extract null-terminated string from absolute file offset
+    let extract_string = |offset: u32| -> Result<String, LdconfigError> {
+        let start = offset as usize;
+        if start >= data.len() {
+            return Err(LdconfigError::CacheRead(format!(
+                "Invalid offset: {}",
+                offset
+            )));
+        }
+
+        let slice = &data[start..];
+        let null_pos = slice.iter().position(|&b| b == 0).unwrap_or(slice.len());
+
+        String::from_utf8(slice[..null_pos].to_vec()).map_err(|_| {
+            LdconfigError::CacheRead("Invalid UTF-8 in string".to_string())
+        })
+    };
+
+    // Helper function to decode architecture from flags
+    let decode_arch = |flags: u32| -> &'static str {
+        let arch_bits = (flags >> 8) & 0xf;
+        match arch_bits {
+            0 => "libc6",           // i386
+            3 => "libc6,x86-64",    // x86_64
+            8 => "libc6,x32",       // x32
+            10 => "libc6,AArch64",  // aarch64
+            5 => "libc6,riscv64",   // riscv64
+            4 => "libc6,64bit",     // ppc64
+            6 => "libc6,IA-64",     // ia64
+            9 => "libc6,ARM,hard-float", // arm hf
+            _ => "unknown",
+        }
+    };
+
+    // Print each entry
+    for entry in &cache_info.entries {
+        let libname = extract_string(entry.key_offset)?;
+        let libpath = extract_string(entry.value_offset)?;
+        let arch_str = decode_arch(entry.flags as u32);
+
+        // Format: "    libname (arch) => /path/to/lib"
+        print!("\t{} ({})", libname, arch_str);
+
+        // Add hwcap info if present
+        if entry.hwcap != 0 {
+            print!(", hwcap: 0x{:016x}", entry.hwcap);
+        }
+
+        println!(" => {}", libpath);
     }
 
     Ok(())
