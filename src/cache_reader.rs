@@ -27,8 +27,8 @@ pub struct CacheInfo {
 }
 
 pub fn read_cache_file(path: &Path) -> Result<CacheInfo, Error> {
-    let data = fs::read(path)
-        .map_err(|e| Error::CacheWrite(format!("Failed to read cache: {}", e)))?;
+    let data =
+        fs::read(path).map_err(|e| Error::CacheWrite(format!("Failed to read cache: {}", e)))?;
 
     parse_cache_data(&data)
 }

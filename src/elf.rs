@@ -125,7 +125,10 @@ fn detect_architecture(elf: &Elf) -> Result<ElfArch, Error> {
         _ => {
             // Use goblin's machine_to_str for better error messages
             let machine_str = machine_to_str(elf.header.e_machine);
-            eprintln!("Unsupported architecture: {} (0x{:x})", machine_str, elf.header.e_machine);
+            eprintln!(
+                "Unsupported architecture: {} (0x{:x})",
+                machine_str, elf.header.e_machine
+            );
             Err(Error::UnsupportedArchitecture)
         }
     }

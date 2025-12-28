@@ -167,7 +167,11 @@ fn main() -> Result<(), Error> {
     let (real_files, existing_symlinks) = scan_all_libraries(&scan_dirs)?;
 
     if options.verbose {
-        println!("Found {} real files, {} existing symlinks", real_files.len(), existing_symlinks.len());
+        println!(
+            "Found {} real files, {} existing symlinks",
+            real_files.len(),
+            existing_symlinks.len()
+        );
     }
 
     // STEP 2: Update symlinks from real files
@@ -250,7 +254,10 @@ fn main() -> Result<(), Error> {
             println!("Wrote {} bytes to {}", cache.len(), cache_path);
         }
     } else if options.verbose {
-        println!("Dry run: would write {} entries to cache", unique_libraries.len());
+        println!(
+            "Dry run: would write {} entries to cache",
+            unique_libraries.len()
+        );
     }
 
     Ok(())
@@ -258,9 +265,10 @@ fn main() -> Result<(), Error> {
 
 fn print_cache(options: &Options) -> Result<(), Error> {
     // Determine cache file path
-    let cache_path = options.cache.clone().unwrap_or_else(|| {
-        options.prefix.join("etc/ld.so.cache")
-    });
+    let cache_path = options
+        .cache
+        .clone()
+        .unwrap_or_else(|| options.prefix.join("etc/ld.so.cache"));
 
     // Read and parse cache
     let data = std::fs::read(&cache_path)
@@ -279,31 +287,27 @@ fn print_cache(options: &Options) -> Result<(), Error> {
     let extract_string = |offset: u32| -> Result<String, Error> {
         let start = offset as usize;
         if start >= data.len() {
-            return Err(Error::CacheRead(format!(
-                "Invalid offset: {}",
-                offset
-            )));
+            return Err(Error::CacheRead(format!("Invalid offset: {}", offset)));
         }
 
         let slice = &data[start..];
         let null_pos = slice.iter().position(|&b| b == 0).unwrap_or(slice.len());
 
-        String::from_utf8(slice[..null_pos].to_vec()).map_err(|_| {
-            Error::CacheRead("Invalid UTF-8 in string".to_string())
-        })
+        String::from_utf8(slice[..null_pos].to_vec())
+            .map_err(|_| Error::CacheRead("Invalid UTF-8 in string".to_string()))
     };
 
     // Helper function to decode architecture from flags
     let decode_arch = |flags: u32| -> &'static str {
         let arch_bits = (flags >> 8) & 0xf;
         match arch_bits {
-            0 => "libc6",           // i386
-            3 => "libc6,x86-64",    // x86_64
-            8 => "libc6,x32",       // x32
-            10 => "libc6,AArch64",  // aarch64
-            5 => "libc6,riscv64",   // riscv64
-            4 => "libc6,64bit",     // ppc64
-            6 => "libc6,IA-64",     // ia64
+            0 => "libc6",                // i386
+            3 => "libc6,x86-64",         // x86_64
+            8 => "libc6,x32",            // x32
+            10 => "libc6,AArch64",       // aarch64
+            5 => "libc6,riscv64",        // riscv64
+            4 => "libc6,64bit",          // ppc64
+            6 => "libc6,IA-64",          // ia64
             9 => "libc6,ARM,hard-float", // arm hf
             _ => "unknown",
         }

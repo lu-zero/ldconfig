@@ -58,8 +58,8 @@ pub fn expand_includes(config: &Config) -> Result<Vec<Utf8PathBuf>, Error> {
 
     for pattern in &config.include_patterns {
         // Use glob to expand the pattern
-        for entry in glob::glob(pattern)
-            .map_err(|e| Error::Config(format!("Glob pattern error: {}", e)))?
+        for entry in
+            glob::glob(pattern).map_err(|e| Error::Config(format!("Glob pattern error: {}", e)))?
         {
             match entry {
                 Ok(path) => {

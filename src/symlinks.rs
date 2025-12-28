@@ -67,9 +67,8 @@ pub fn update_symlinks(
             if should_create_symlink(symlink_path.as_std_path(), best_lib.path.as_std_path())? {
                 actions.push(SymlinkAction {
                     target: Utf8PathBuf::from(filename),
-                    link: Utf8PathBuf::try_from(symlink_path.clone()).map_err(|_| {
-                        Error::Config("Invalid UTF-8 in symlink path".to_string())
-                    })?,
+                    link: Utf8PathBuf::try_from(symlink_path.clone())
+                        .map_err(|_| Error::Config("Invalid UTF-8 in symlink path".to_string()))?,
                     action: SymlinkActionType::Create,
                 });
 
@@ -173,4 +172,3 @@ fn should_create_symlink(link_path: &Path, target_path: &Path) -> Result<bool, E
         Err(_) => Ok(true), // If we can't read the link, assume we need to create it
     }
 }
-

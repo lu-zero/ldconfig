@@ -1,6 +1,6 @@
 use crate::elf::{parse_elf_file, ElfLibrary};
-use crate::Error;
 use crate::hwcap::detect_hwcap_dirs;
+use crate::Error;
 use camino::Utf8PathBuf;
 use std::collections::HashMap;
 use std::path::Path;
@@ -36,10 +36,7 @@ pub fn should_include_symlink(filename: &str, soname: &str, path: &Utf8PathBuf) 
     if filename.ends_with(".so") && !filename.contains(".so.") {
         // Bare .so symlink: include if target has same base name + .so.VERSION pattern
         if let Ok(target) = std::fs::read_link(path.as_std_path()) {
-            let target_name = target
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
+            let target_name = target.file_name().and_then(|n| n.to_str()).unwrap_or("");
             let base = filename.trim_end_matches(".so");
             // Include if target is like libfoo.so.X (standard pattern)
             // Exclude if target is like libfoo-X.so (dash-version) or libbar.so (different base)
@@ -122,11 +119,7 @@ pub fn deduplicate_libraries(libraries: &[ElfLibrary]) -> Vec<ElfLibrary> {
     let mut unique_libs: HashMap<(Utf8PathBuf, String), ElfLibrary> = HashMap::new();
 
     for lib in libraries {
-        let dir = lib
-            .path
-            .parent()
-            .unwrap_or_else(|| "".as_ref())
-            .to_owned();
+        let dir = lib.path.parent().unwrap_or_else(|| "".as_ref()).to_owned();
         let filename = lib
             .path
             .file_name()

@@ -62,7 +62,8 @@ pub fn build_cache(libraries: &[ElfLibrary], prefix: Option<&Utf8Path>) -> Vec<u
     sorted_libs.sort_by(|a, b| {
         let filename_a = a.path.file_name().unwrap_or(a.path.as_str());
         let filename_b = b.path.file_name().unwrap_or(b.path.as_str());
-        match filename_b.cmp(filename_a) {  // REVERSED: b.cmp(a) instead of a.cmp(b)
+        match filename_b.cmp(filename_a) {
+            // REVERSED: b.cmp(a) instead of a.cmp(b)
             std::cmp::Ordering::Equal => {
                 // Higher hwcap comes first (more specialized)
                 b.hwcap.unwrap_or(0).cmp(&a.hwcap.unwrap_or(0))
@@ -87,7 +88,9 @@ pub fn build_cache(libraries: &[ElfLibrary], prefix: Option<&Utf8Path>) -> Vec<u
         let dir = lib.path.parent().unwrap_or_else(|| Utf8Path::new(""));
         let filename_part = lib.path.file_name().unwrap_or(lib.path.as_str());
 
-        let canonical_dir = dir.as_std_path().canonicalize()
+        let canonical_dir = dir
+            .as_std_path()
+            .canonicalize()
             .ok()
             .and_then(|p| Utf8PathBuf::try_from(p).ok())
             .unwrap_or_else(|| dir.to_path_buf());
@@ -96,7 +99,9 @@ pub fn build_cache(libraries: &[ElfLibrary], prefix: Option<&Utf8Path>) -> Vec<u
 
         let path_to_add = if let Some(prefix) = prefix {
             // Get canonical prefix for comparison
-            let canonical_prefix = prefix.as_std_path().canonicalize()
+            let canonical_prefix = prefix
+                .as_std_path()
+                .canonicalize()
                 .ok()
                 .and_then(|p| Utf8PathBuf::try_from(p).ok())
                 .unwrap_or_else(|| prefix.to_path_buf());
@@ -137,7 +142,9 @@ pub fn build_cache(libraries: &[ElfLibrary], prefix: Option<&Utf8Path>) -> Vec<u
         let dir = lib.path.parent().unwrap_or_else(|| Utf8Path::new(""));
         let filename_part = lib.path.file_name().unwrap_or(lib.path.as_str());
 
-        let canonical_dir = dir.as_std_path().canonicalize()
+        let canonical_dir = dir
+            .as_std_path()
+            .canonicalize()
             .ok()
             .and_then(|p| Utf8PathBuf::try_from(p).ok())
             .unwrap_or_else(|| dir.to_path_buf());
@@ -145,7 +152,9 @@ pub fn build_cache(libraries: &[ElfLibrary], prefix: Option<&Utf8Path>) -> Vec<u
         let canonical_path = canonical_dir.join(filename_part);
 
         let path_to_add = if let Some(prefix) = prefix {
-            let canonical_prefix = prefix.as_std_path().canonicalize()
+            let canonical_prefix = prefix
+                .as_std_path()
+                .canonicalize()
                 .ok()
                 .and_then(|p| Utf8PathBuf::try_from(p).ok())
                 .unwrap_or_else(|| prefix.to_path_buf());
@@ -239,8 +248,8 @@ pub fn build_cache(libraries: &[ElfLibrary], prefix: Option<&Utf8Path>) -> Vec<u
 
     // Extension section descriptor
     // Note: glibc uses tag=0 for generator (cache_extension_tag_generator enum starts at 0)
-    cache.extend_from_slice(&0u32.to_le_bytes());  // tag: 0 (cache_extension_tag_generator)
-    cache.extend_from_slice(&0u32.to_le_bytes());  // flags: 0
+    cache.extend_from_slice(&0u32.to_le_bytes()); // tag: 0 (cache_extension_tag_generator)
+    cache.extend_from_slice(&0u32.to_le_bytes()); // flags: 0
     cache.extend_from_slice(&generator_data_offset.to_le_bytes()); // offset to data
     cache.extend_from_slice(&(generator_bytes.len() as u32).to_le_bytes()); // size of data
 

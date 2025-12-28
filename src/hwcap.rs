@@ -38,9 +38,9 @@ impl HwCap {
             (ElfArch::X86_64, HwCap::Custom(s)) if s == "x86-64-v2" => 0x01,
             (ElfArch::X86_64, HwCap::Custom(s)) if s == "x86-64-v3" => 0x02,
             (ElfArch::X86_64, HwCap::Custom(s)) if s == "x86-64-v4" => 0x04,
-            (ElfArch::X86_64, HwCap::Haswell) => 0x02,  // AVX2 level
-            (ElfArch::X86_64, HwCap::Avx512) => 0x04,   // AVX-512 level
-            (ElfArch::X86_64, HwCap::Sse) => 0x00,      // Baseline, no special hwcap
+            (ElfArch::X86_64, HwCap::Haswell) => 0x02, // AVX2 level
+            (ElfArch::X86_64, HwCap::Avx512) => 0x04,  // AVX-512 level
+            (ElfArch::X86_64, HwCap::Sse) => 0x00,     // Baseline, no special hwcap
 
             // ARM64 hwcaps (from Linux kernel)
             (ElfArch::AArch64, HwCap::Custom(s)) if s == "asimd" => 1 << 1,
