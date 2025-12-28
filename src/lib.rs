@@ -7,6 +7,7 @@ pub mod config;
 pub mod elf;
 pub mod error;
 pub mod hwcap;
+pub mod scanner;
 pub mod symlinks;
 
 pub use cache::{build_cache, CacheEntry};
@@ -15,4 +16,8 @@ pub use config::{expand_includes, parse_config_content, parse_config_file, Confi
 pub use elf::{parse_elf_file, ElfArch, ElfLibrary};
 pub use error::{ElfError, LdconfigError};
 pub use hwcap::{detect_hwcap_dirs, scan_hwcap_libraries, HwCap};
+pub use scanner::{
+    deduplicate_libraries, deduplicate_scan_directories, is_dso, scan_all_libraries,
+    should_include_symlink, should_scan_library,
+};
 pub use symlinks::{create_symlink, update_symlinks, SymlinkAction, SymlinkActionType};
