@@ -14,6 +14,7 @@ pub struct Cache {
 
 impl Cache {
     /// Create cache from bytes
+    #[allow(dead_code)]
     pub(crate) fn from_bytes(data: Vec<u8>) -> Self {
         Self { data }
     }

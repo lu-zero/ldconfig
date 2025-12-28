@@ -454,32 +454,6 @@ pub(crate) fn arch_to_flags(arch: ElfArch, is_64bit: bool, is_hardfloat: bool) -
     }
 }
 
-/// Convert flags to architecture string
-pub(crate) fn flags_to_arch_string(flags: u32) -> &'static str {
-    let arch_flag = flags & 0xff00;
-    match arch_flag {
-        FLAG_X8664_LIB64 => "x86-64",
-        FLAG_AARCH64_LIB64 => "AArch64",
-        FLAG_RISCV_FLOAT_ABI_DOUBLE => "RISC-V 64-bit (lp64d)",
-        FLAG_POWERPC_LIB64 => "PowerPC 64-bit",
-        FLAG_ARM_LIBHF => "ARM hard-float",
-        FLAG_ARM_LIBSF => "ARM soft-float",
-        FLAG_SPARC_LIB64 => "SPARC 64-bit",
-        FLAG_S390_LIB64 => "S390 64-bit",
-        FLAG_MIPS64_LIBN32 => "MIPS N32",
-        FLAG_MIPS64_LIBN64 => "MIPS 64-bit",
-        FLAG_X8664_LIBX32 => "x86-64 x32",
-        FLAG_RISCV_FLOAT_ABI_SOFT => "RISC-V soft-float",
-        _ => {
-            if (flags & FLAG_ELF_LIBC6) == FLAG_ELF_LIBC6 {
-                "ELF"
-            } else {
-                "unknown"
-            }
-        }
-    }
-}
-
 fn add_string(table: &mut Vec<u8>, offsets: &mut HashMap<String, u32>, string: &str) {
     if !offsets.contains_key(string) {
         let offset = table.len() as u32;

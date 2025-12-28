@@ -149,20 +149,31 @@ impl LibraryConfig {
 
 ## Testing
 
-The library includes comprehensive testing through examples:
+The library includes comprehensive testing through examples since it is fairly cumbersome to automate.
+
+You may download any minimal docker image sporting glibc or use [chroot-stages](https://github.com/lu-zero/crossdev-stages/blob/master/chroot-stage.sh) to download
+a Gentoo stage3
 
 ```bash
 # Test with AArch64 libraries
-cargo run --bin ldconfig -- -r test-root -C test-aarch64.cache -v
+cargo run --bin ldconfig -- -r <stage3-arm64> -C test-aarch64.cache -v
 
 # Test with RISC-V libraries
-cargo run --bin ldconfig -- -r stage3-rv64_lp64d -C test-riscv.cache -v
+cargo run --bin ldconfig -- -r <stage3-rv64_lp64d> -C test-riscv.cache -v
 
 # Compare against reference implementation
-cargo run --example compare_caches -- test-aarch64.cache reference.cache
+cargo run --example compare_caches -- test-aarch64.cache <stage3-arm64>/etc/ld.so.cache
 ```
 
 The `compare_caches` example uses the [ld-so-cache](https://crates.io/crates/ld-so-cache) crate for cross-validation to ensure compatibility with existing tools.
+
+## Development
+
+This code was written with the assistance of:
+- [Claude](https://claude.ai) - AI assistant by Anthropic
+- [mistral-vibe](https://github.com/mistralai/mistral-vibe) - AI assistant by Mistral
+
+The code is manually reviewed and should not contain hallucination on release, but single commits in the history can be nonsensical.
 
 ## License
 
