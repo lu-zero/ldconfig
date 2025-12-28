@@ -36,47 +36,49 @@ pub fn update_symlinks(
         std::collections::HashMap::new();
 
     for lib in libraries {
-        soname_map.entry(lib.soname.clone()).or_default().push(lib);
+        // Only consider real files (not symlinks)
+        let is_symlink = std::fs::symlink_metadata(&lib.path)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false);
+
+        if !is_symlink {
+            soname_map.entry(lib.soname.clone()).or_default().push(lib);
+        }
     }
 
-    // For each SONAME, find the newest library and create appropriate symlinks
+    // For each SONAME, find the highest-versioned library and create symlink
     for (soname, libs) in soname_map {
-        // Find the newest library (by modification time)
-        let newest_lib = find_newest_library(&libs);
-
-        // Create libname.so.X -> libname.so.X.Y.Z symlink
-        let so_x_path = create_so_x_path(newest_lib.path.as_std_path(), &soname);
-
-        if should_create_symlink(&so_x_path, newest_lib.path.as_std_path())? {
-            actions.push(SymlinkAction {
-                target: newest_lib.path.clone(),
-                link: Utf8PathBuf::try_from(so_x_path.clone()).map_err(|_| {
-                    LdconfigError::Config("Invalid UTF-8 in symlink path".to_string())
-                })?,
-                action: SymlinkActionType::Create,
-            });
-
-            if !dry_run {
-                create_symlink(newest_lib.path.as_std_path(), &so_x_path)?;
-            }
+        if libs.is_empty() {
+            continue;
         }
 
-        // Create libname.so -> libname.so.X symlink (if libname.so exists)
-        let dev_symlink_path = create_dev_symlink_path(newest_lib.path.as_std_path(), &soname);
-        if dev_symlink_path.exists() {
-            if should_create_symlink(&dev_symlink_path, &so_x_path)? {
+        // Find the highest-versioned library (by filename numerical comparison)
+        let best_lib = find_highest_version_library(&libs);
+
+        let filename = best_lib.path.file_name().unwrap_or("");
+
+        // Only create symlink if SONAME != filename (avoid self-referencing symlinks)
+        if filename != soname {
+            let symlink_path = best_lib.path.parent().unwrap().join(&soname);
+
+            // Target is just the filename (relative symlink in same directory)
+            let target_path = Path::new(filename);
+
+            if should_create_symlink(symlink_path.as_std_path(), best_lib.path.as_std_path())? {
                 actions.push(SymlinkAction {
-                    target: Utf8PathBuf::try_from(so_x_path.clone()).map_err(|_| {
-                        LdconfigError::Config("Invalid UTF-8 in symlink path".to_string())
-                    })?,
-                    link: Utf8PathBuf::try_from(dev_symlink_path.clone()).map_err(|_| {
+                    target: Utf8PathBuf::from(filename),
+                    link: Utf8PathBuf::try_from(symlink_path.clone()).map_err(|_| {
                         LdconfigError::Config("Invalid UTF-8 in symlink path".to_string())
                     })?,
                     action: SymlinkActionType::Create,
                 });
 
                 if !dry_run {
-                    create_symlink(&so_x_path, &dev_symlink_path)?;
+                    // Remove existing symlink/file if it exists
+                    if symlink_path.exists() || symlink_path.symlink_metadata().is_ok() {
+                        let _ = fs::remove_file(&symlink_path);
+                    }
+                    create_symlink(target_path, symlink_path.as_std_path())?;
                 }
             }
         }
@@ -85,42 +87,71 @@ pub fn update_symlinks(
     Ok(actions)
 }
 
-fn find_newest_library<'a>(libs: &'a [&'a ElfLibrary]) -> &'a ElfLibrary {
+/// Find the library with the highest version by comparing filenames numerically
+/// Uses the same algorithm as glibc's _dl_cache_libcmp
+fn find_highest_version_library<'a>(libs: &'a [&'a ElfLibrary]) -> &'a ElfLibrary {
     libs.iter()
         .max_by(|a, b| {
-            compare_soname_versions(&a.soname, &b.soname)
+            let filename_a = a.path.file_name().unwrap_or("");
+            let filename_b = b.path.file_name().unwrap_or("");
+            compare_library_versions(filename_a, filename_b)
         })
         .unwrap_or(&libs[0])
 }
 
-/// Compare SONAME versions numerically (e.g., 1.2.10 > 1.2.9)
-fn compare_soname_versions(a: &str, b: &str) -> std::cmp::Ordering {
-    // Extract version from SONAME (e.g., "libfoo.so.1.2.3" -> [1, 2, 3])
-    let extract_version = |s: &str| -> Vec<u32> {
-        s.rsplit('.').take_while(|part| part.parse::<u32>().is_ok())
-            .map(|part| part.parse::<u32>().unwrap())
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect()
-    };
+/// Compare library versions numerically, like glibc's _dl_cache_libcmp
+/// Higher version returns Greater
+fn compare_library_versions(a: &str, b: &str) -> std::cmp::Ordering {
+    let mut a_chars = a.chars().peekable();
+    let mut b_chars = b.chars().peekable();
 
-    let ver_a = extract_version(a);
-    let ver_b = extract_version(b);
+    loop {
+        let a_ch = a_chars.peek().copied();
+        let b_ch = b_chars.peek().copied();
 
-    // Compare version components
-    for (va, vb) in ver_a.iter().zip(ver_b.iter()) {
-        match va.cmp(vb) {
-            std::cmp::Ordering::Equal => continue,
-            other => return other,
+        match (a_ch, b_ch) {
+            (None, None) => return std::cmp::Ordering::Equal,
+            (None, Some(_)) => return std::cmp::Ordering::Less,
+            (Some(_), None) => return std::cmp::Ordering::Greater,
+            (Some(ac), Some(bc)) => {
+                // If both are digits, compare numerically
+                if ac.is_ascii_digit() && bc.is_ascii_digit() {
+                    let mut a_num = 0u64;
+                    let mut b_num = 0u64;
+
+                    while let Some(&ch) = a_chars.peek() {
+                        if ch.is_ascii_digit() {
+                            a_num = a_num * 10 + (ch as u64 - '0' as u64);
+                            a_chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+
+                    while let Some(&ch) = b_chars.peek() {
+                        if ch.is_ascii_digit() {
+                            b_num = b_num * 10 + (ch as u64 - '0' as u64);
+                            b_chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+
+                    if a_num != b_num {
+                        return a_num.cmp(&b_num); // Higher number is greater
+                    }
+                } else {
+                    // Compare characters normally
+                    if ac != bc {
+                        return ac.cmp(&bc);
+                    }
+                    a_chars.next();
+                    b_chars.next();
+                }
+            }
         }
     }
-
-    // If all components equal, longer version wins
-    ver_a.len().cmp(&ver_b.len())
 }
-
-use std::path::PathBuf;
 
 fn should_create_symlink(link_path: &Path, target_path: &Path) -> Result<bool, LdconfigError> {
     if !link_path.exists() {
@@ -143,31 +174,3 @@ fn should_create_symlink(link_path: &Path, target_path: &Path) -> Result<bool, L
     }
 }
 
-fn create_so_x_path(_real_path: &Path, soname: &str) -> PathBuf {
-    // SONAME is already the correct symlink name (e.g., "libfoo.so.1")
-    // Just use parent directory of real path + SONAME
-    _real_path.parent().unwrap().join(soname)
-}
-
-fn create_dev_symlink_path(real_path: &Path, soname: &str) -> PathBuf {
-    // For libfoo.so.1, create libfoo.so
-    if let Some(parent) = real_path.parent() {
-        let filename = real_path.file_name().unwrap().to_string_lossy();
-
-        // Extract the base name
-        if let Some(lib_name) = filename.strip_suffix(".so") {
-            if let Some(first_dot) = lib_name.find('.') {
-                let base = &lib_name[..first_dot];
-                return parent.join(format!("{}.so", base));
-            }
-        }
-    }
-
-    // Fallback: remove the version from SONAME
-    if let Some(last_dot) = soname.rfind('.') {
-        let base = &soname[..last_dot];
-        return real_path.parent().unwrap().join(format!("{}.so", base));
-    }
-
-    real_path.parent().unwrap().join(soname)
-}
