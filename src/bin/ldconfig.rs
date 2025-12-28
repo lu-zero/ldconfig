@@ -13,7 +13,7 @@ struct Options {
     /// Verbose output
     verbose: bool,
 
-    #[bpaf(short, long)]
+    #[bpaf(short('N'), long)]
     /// Dry run - don't make changes
     dry_run: bool,
 
@@ -21,7 +21,7 @@ struct Options {
     /// Print cache contents
     print_cache: bool,
 
-    #[bpaf(short, long, argument("PREFIX"), fallback("/".into()))]
+    #[bpaf(short('r'), long, argument("PREFIX"), fallback("/".into()))]
     /// Use alternative root prefix (like chroot)
     prefix: Utf8PathBuf,
 
@@ -29,7 +29,7 @@ struct Options {
     /// Use cache file path
     cache: Option<Utf8PathBuf>,
 
-    #[bpaf(short('c'), long, argument("CONFIG"))]
+    #[bpaf(short('f'), long("config"), argument("CONFIG"))]
     /// Use alternative config file
     config_file: Option<Utf8PathBuf>,
 }
