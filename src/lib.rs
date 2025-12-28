@@ -14,7 +14,7 @@ pub use cache::{build_cache, CacheEntry};
 pub use cache_reader::{parse_cache_data, read_cache_file, CacheInfo};
 pub use config::{expand_includes, parse_config_content, parse_config_file, Config};
 pub use elf::{parse_elf_file, ElfArch, ElfLibrary};
-pub use error::{ElfError, LdconfigError};
+pub use error::Error;
 pub use hwcap::{detect_hwcap_dirs, scan_hwcap_libraries, HwCap};
 pub use scanner::{
     deduplicate_libraries, deduplicate_scan_directories, is_dso, scan_all_libraries,

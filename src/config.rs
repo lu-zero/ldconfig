@@ -1,4 +1,4 @@
-use crate::error::LdconfigError;
+use crate::Error;
 use camino::{Utf8Path, Utf8PathBuf};
 use std::fs;
 
@@ -22,14 +22,14 @@ impl Default for Config {
     }
 }
 
-pub fn parse_config_file(path: &Utf8Path) -> Result<Config, LdconfigError> {
+pub fn parse_config_file(path: &Utf8Path) -> Result<Config, Error> {
     let content = fs::read_to_string(path)
-        .map_err(|e| LdconfigError::Config(format!("Failed to read config file: {}", e)))?;
+        .map_err(|e| Error::Config(format!("Failed to read config file: {}", e)))?;
 
     parse_config_content(&content)
 }
 
-pub fn parse_config_content(content: &str) -> Result<Config, LdconfigError> {
+pub fn parse_config_content(content: &str) -> Result<Config, Error> {
     let mut config = Config::default();
 
     for line in content.lines() {
@@ -53,20 +53,20 @@ pub fn parse_config_content(content: &str) -> Result<Config, LdconfigError> {
     Ok(config)
 }
 
-pub fn expand_includes(config: &Config) -> Result<Vec<Utf8PathBuf>, LdconfigError> {
+pub fn expand_includes(config: &Config) -> Result<Vec<Utf8PathBuf>, Error> {
     let mut included_dirs = Vec::new();
 
     for pattern in &config.include_patterns {
         // Use glob to expand the pattern
         for entry in glob::glob(pattern)
-            .map_err(|e| LdconfigError::Config(format!("Glob pattern error: {}", e)))?
+            .map_err(|e| Error::Config(format!("Glob pattern error: {}", e)))?
         {
             match entry {
                 Ok(path) => {
                     if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("conf") {
                         // This is a config file, parse it
                         let content = std::fs::read_to_string(&path).map_err(|e| {
-                            LdconfigError::Config(format!(
+                            Error::Config(format!(
                                 "Failed to read included config file {}: {}",
                                 path.display(),
                                 e

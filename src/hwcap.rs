@@ -1,5 +1,5 @@
 use crate::elf::ElfArch;
-use crate::error::LdconfigError;
+use crate::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -57,7 +57,7 @@ impl HwCap {
     }
 }
 
-pub fn detect_hwcap_dirs(base_dir: &Path) -> Result<Vec<(PathBuf, HwCap)>, LdconfigError> {
+pub fn detect_hwcap_dirs(base_dir: &Path) -> Result<Vec<(PathBuf, HwCap)>, Error> {
     let mut hwcap_dirs = Vec::new();
 
     if !base_dir.exists() {
@@ -84,7 +84,7 @@ pub fn detect_hwcap_dirs(base_dir: &Path) -> Result<Vec<(PathBuf, HwCap)>, Ldcon
 
 pub fn scan_hwcap_libraries(
     hwcap_dirs: &[(PathBuf, HwCap)],
-) -> Result<Vec<(PathBuf, HwCap)>, LdconfigError> {
+) -> Result<Vec<(PathBuf, HwCap)>, Error> {
     let mut libraries = Vec::new();
 
     for (dir, hwcap) in hwcap_dirs {

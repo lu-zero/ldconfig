@@ -3,7 +3,7 @@ use camino::Utf8PathBuf;
 use ldconfig::{
     build_cache, deduplicate_libraries, deduplicate_scan_directories, expand_includes,
     parse_cache_data, parse_config_file, parse_elf_file, scan_all_libraries,
-    should_include_symlink, update_symlinks, Config, LdconfigError,
+    should_include_symlink, update_symlinks, Config, Error,
 };
 
 #[derive(Debug, Clone, Bpaf)]
@@ -34,7 +34,7 @@ struct Options {
     config_file: Option<Utf8PathBuf>,
 }
 
-fn main() -> Result<(), LdconfigError> {
+fn main() -> Result<(), Error> {
     let options = options().run();
 
     // Handle print-cache flag
@@ -256,7 +256,7 @@ fn main() -> Result<(), LdconfigError> {
     Ok(())
 }
 
-fn print_cache(options: &Options) -> Result<(), LdconfigError> {
+fn print_cache(options: &Options) -> Result<(), Error> {
     // Determine cache file path
     let cache_path = options.cache.clone().unwrap_or_else(|| {
         options.prefix.join("etc/ld.so.cache")
@@ -264,7 +264,7 @@ fn print_cache(options: &Options) -> Result<(), LdconfigError> {
 
     // Read and parse cache
     let data = std::fs::read(&cache_path)
-        .map_err(|e| LdconfigError::CacheWrite(format!("Failed to read cache: {}", e)))?;
+        .map_err(|e| Error::CacheWrite(format!("Failed to read cache: {}", e)))?;
 
     let cache_info = parse_cache_data(&data)?;
 
@@ -276,10 +276,10 @@ fn print_cache(options: &Options) -> Result<(), LdconfigError> {
     );
 
     // Helper function to extract null-terminated string from absolute file offset
-    let extract_string = |offset: u32| -> Result<String, LdconfigError> {
+    let extract_string = |offset: u32| -> Result<String, Error> {
         let start = offset as usize;
         if start >= data.len() {
-            return Err(LdconfigError::CacheRead(format!(
+            return Err(Error::CacheRead(format!(
                 "Invalid offset: {}",
                 offset
             )));
@@ -289,7 +289,7 @@ fn print_cache(options: &Options) -> Result<(), LdconfigError> {
         let null_pos = slice.iter().position(|&b| b == 0).unwrap_or(slice.len());
 
         String::from_utf8(slice[..null_pos].to_vec()).map_err(|_| {
-            LdconfigError::CacheRead("Invalid UTF-8 in string".to_string())
+            Error::CacheRead("Invalid UTF-8 in string".to_string())
         })
     };
 

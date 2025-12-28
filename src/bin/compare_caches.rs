@@ -1,5 +1,5 @@
 use bpaf::Bpaf;
-use ldconfig::{parse_cache_data, LdconfigError};
+use ldconfig::{parse_cache_data, Error};
 use std::path::PathBuf;
 
 #[cfg(feature = "ld-so-cache")]
@@ -17,7 +17,7 @@ struct Options {
     real_cache: PathBuf,
 }
 
-fn compare_caches(our_cache: &[u8], real_cache: &[u8]) -> Result<(), LdconfigError> {
+fn compare_caches(our_cache: &[u8], real_cache: &[u8]) -> Result<(), Error> {
     let our_info = parse_cache_data(our_cache)?;
     let real_info = parse_cache_data(real_cache)?;
 
@@ -72,15 +72,15 @@ fn compare_caches(our_cache: &[u8], real_cache: &[u8]) -> Result<(), LdconfigErr
     Ok(())
 }
 
-fn main() -> Result<(), LdconfigError> {
+fn main() -> Result<(), Error> {
     let options = options().run();
 
     // Read both cache files
     let our_data = std::fs::read(&options.our_cache)
-        .map_err(|e| LdconfigError::CacheWrite(format!("Failed to read our cache: {}", e)))?;
+        .map_err(|e| Error::CacheWrite(format!("Failed to read our cache: {}", e)))?;
 
     let real_data = std::fs::read(&options.real_cache)
-        .map_err(|e| LdconfigError::CacheWrite(format!("Failed to read real cache: {}", e)))?;
+        .map_err(|e| Error::CacheWrite(format!("Failed to read real cache: {}", e)))?;
 
     println!("=== Extended Cache Comparison ===");
     println!("Using both our implementation and ld-so-cache crate");

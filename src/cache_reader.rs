@@ -1,4 +1,4 @@
-use crate::error::LdconfigError;
+use crate::Error;
 use std::fs;
 use std::path::Path;
 
@@ -26,14 +26,14 @@ pub struct CacheInfo {
     pub generator: Option<String>,
 }
 
-pub fn read_cache_file(path: &Path) -> Result<CacheInfo, LdconfigError> {
+pub fn read_cache_file(path: &Path) -> Result<CacheInfo, Error> {
     let data = fs::read(path)
-        .map_err(|e| LdconfigError::CacheWrite(format!("Failed to read cache: {}", e)))?;
+        .map_err(|e| Error::CacheWrite(format!("Failed to read cache: {}", e)))?;
 
     parse_cache_data(&data)
 }
 
-pub fn parse_cache_data(data: &[u8]) -> Result<CacheInfo, LdconfigError> {
+pub fn parse_cache_data(data: &[u8]) -> Result<CacheInfo, Error> {
     // Parse header
     let magic = String::from_utf8_lossy(&data[..20]).to_string();
     let nlibs = u32::from_ne_bytes([data[20], data[21], data[22], data[23]]);

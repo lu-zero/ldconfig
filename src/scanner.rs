@@ -1,5 +1,5 @@
 use crate::elf::{parse_elf_file, ElfLibrary};
-use crate::error::LdconfigError;
+use crate::Error;
 use crate::hwcap::detect_hwcap_dirs;
 use camino::Utf8PathBuf;
 use std::collections::HashMap;
@@ -57,7 +57,7 @@ pub fn should_include_symlink(filename: &str, soname: &str, path: &Utf8PathBuf) 
 /// Returns (real_files, symlinks)
 pub fn scan_all_libraries(
     dirs: &[Utf8PathBuf],
-) -> Result<(Vec<ElfLibrary>, Vec<ElfLibrary>), LdconfigError> {
+) -> Result<(Vec<ElfLibrary>, Vec<ElfLibrary>), Error> {
     let mut real_files = Vec::new();
     let mut symlinks = Vec::new();
 

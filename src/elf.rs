@@ -1,10 +1,33 @@
-use crate::error::{ElfError, LdconfigError};
 use camino::Utf8PathBuf;
 use goblin::elf::header::ET_DYN;
 use goblin::elf::Elf;
 use memmap2::Mmap;
 use std::fs::File;
 use std::path::Path;
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("Not a shared object (ET_DYN)")]
+    NotSharedObject,
+
+    #[error("Missing PT_DYNAMIC segment")]
+    MissingDynamicSegment,
+
+    #[error("Missing DT_SONAME entry")]
+    MissingSoname,
+
+    #[error("Empty SONAME")]
+    EmptySoname,
+
+    #[error("Unsupported ELF class")]
+    UnsupportedClass,
+
+    #[error("Unsupported endianness")]
+    UnsupportedEndianness,
+
+    #[error("Unsupported architecture")]
+    UnsupportedArchitecture,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ElfArch {
@@ -28,7 +51,7 @@ pub struct ElfLibrary {
     pub hwcap: Option<u64>,
 }
 
-pub fn parse_elf_file(path: &Path) -> Result<ElfLibrary, LdconfigError> {
+pub fn parse_elf_file(path: &Path) -> Result<ElfLibrary, crate::Error> {
     let file = File::open(path)?;
     let mmap = unsafe { Mmap::map(&file)? };
     let elf = Elf::parse(&mmap)?;
@@ -40,7 +63,7 @@ pub fn parse_elf_file(path: &Path) -> Result<ElfLibrary, LdconfigError> {
 
     // Convert Path to Utf8PathBuf
     let utf8_path = Utf8PathBuf::try_from(path.to_path_buf())
-        .map_err(|_| LdconfigError::Config("Path contains invalid UTF-8".to_string()))?;
+        .map_err(|_| crate::Error::Config("Path contains invalid UTF-8".to_string()))?;
 
     Ok(ElfLibrary {
         soname,
@@ -53,10 +76,10 @@ pub fn parse_elf_file(path: &Path) -> Result<ElfLibrary, LdconfigError> {
     })
 }
 
-fn validate_elf(elf: &Elf) -> Result<(), ElfError> {
+fn validate_elf(elf: &Elf) -> Result<(), Error> {
     // Must be a shared object (ET_DYN)
     if elf.header.e_type != ET_DYN {
-        return Err(ElfError::NotSharedObject);
+        return Err(Error::NotSharedObject);
     }
 
     // Must have PT_DYNAMIC segment
@@ -65,31 +88,31 @@ fn validate_elf(elf: &Elf) -> Result<(), ElfError> {
         .iter()
         .all(|ph| ph.p_type != goblin::elf::program_header::PT_DYNAMIC)
     {
-        return Err(ElfError::MissingDynamicSegment);
+        return Err(Error::MissingDynamicSegment);
     }
 
     Ok(())
 }
 
-fn extract_soname(elf: &Elf, _path: &Path) -> Result<String, LdconfigError> {
+fn extract_soname(elf: &Elf, _path: &Path) -> Result<String, crate::Error> {
     let soname_index = match &elf.dynamic {
         Some(dynamic) => dynamic.info.soname,
-        None => return Err(ElfError::MissingSoname.into()),
+        None => return Err(Error::MissingSoname.into()),
     };
 
     let soname_str = match elf.dynstrtab.get_at(soname_index) {
         Some(s) => s,
-        None => return Err(ElfError::MissingSoname.into()),
+        None => return Err(Error::MissingSoname.into()),
     };
 
     if soname_str.is_empty() {
-        return Err(ElfError::EmptySoname.into());
+        return Err(Error::EmptySoname.into());
     }
 
     Ok(soname_str.to_string())
 }
 
-fn detect_architecture(elf: &Elf) -> Result<ElfArch, ElfError> {
+fn detect_architecture(elf: &Elf) -> Result<ElfArch, Error> {
     use goblin::elf::header::*;
     match elf.header.e_machine {
         EM_X86_64 => Ok(ElfArch::X86_64),
@@ -103,7 +126,7 @@ fn detect_architecture(elf: &Elf) -> Result<ElfArch, ElfError> {
             // Use goblin's machine_to_str for better error messages
             let machine_str = machine_to_str(elf.header.e_machine);
             eprintln!("Unsupported architecture: {} (0x{:x})", machine_str, elf.header.e_machine);
-            Err(ElfError::UnsupportedArchitecture)
+            Err(Error::UnsupportedArchitecture)
         }
     }
 }

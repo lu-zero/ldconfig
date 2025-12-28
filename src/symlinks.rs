@@ -1,5 +1,5 @@
 use crate::elf::ElfLibrary;
-use crate::error::LdconfigError;
+use crate::Error;
 use camino::Utf8PathBuf;
 use std::fs;
 use std::path::Path;
@@ -18,9 +18,9 @@ pub enum SymlinkActionType {
     Skip,
 }
 
-pub fn create_symlink(target: &Path, link: &Path) -> Result<(), LdconfigError> {
+pub fn create_symlink(target: &Path, link: &Path) -> Result<(), Error> {
     std::os::unix::fs::symlink(target, link)
-        .map_err(|e| LdconfigError::Symlink(format!("Failed to create symlink: {}", e)))?;
+        .map_err(|e| Error::Symlink(format!("Failed to create symlink: {}", e)))?;
     Ok(())
 }
 
@@ -28,7 +28,7 @@ pub fn update_symlinks(
     _dir: &Path,
     libraries: &[ElfLibrary],
     dry_run: bool,
-) -> Result<Vec<SymlinkAction>, LdconfigError> {
+) -> Result<Vec<SymlinkAction>, Error> {
     let mut actions = Vec::new();
 
     // Group libraries by their SONAME
@@ -68,7 +68,7 @@ pub fn update_symlinks(
                 actions.push(SymlinkAction {
                     target: Utf8PathBuf::from(filename),
                     link: Utf8PathBuf::try_from(symlink_path.clone()).map_err(|_| {
-                        LdconfigError::Config("Invalid UTF-8 in symlink path".to_string())
+                        Error::Config("Invalid UTF-8 in symlink path".to_string())
                     })?,
                     action: SymlinkActionType::Create,
                 });
@@ -153,7 +153,7 @@ fn compare_library_versions(a: &str, b: &str) -> std::cmp::Ordering {
     }
 }
 
-fn should_create_symlink(link_path: &Path, target_path: &Path) -> Result<bool, LdconfigError> {
+fn should_create_symlink(link_path: &Path, target_path: &Path) -> Result<bool, Error> {
     if !link_path.exists() {
         return Ok(true);
     }
