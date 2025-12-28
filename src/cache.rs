@@ -10,7 +10,7 @@ const FLAG_TYPE_MASK: u32 = 0x00ff;
 const FLAG_ELF_LIBC6: u32 = 0x0003;
 const FLAG_X8664_LIB64: u32 = 0x0300;
 const FLAG_AARCH64_LIB64: u32 = 0x0a00;
-const FLAG_RISCV64_LIB64: u32 = 0x0500;
+const FLAG_RISCV_FLOAT_ABI_DOUBLE: u32 = 0x1000; // RISC-V lp64d (double-precision FP)
 const FLAG_IA64_LIB64: u32 = 0x0600;
 #[allow(dead_code)]
 const FLAG_X8664_LIBX32: u32 = 0x0800;
@@ -190,7 +190,7 @@ pub fn build_cache(libraries: &[ElfLibrary], prefix: Option<&Utf8Path>) -> Vec<u
                 }
             }
             ElfArch::AArch64 => FLAG_AARCH64_LIB64 | FLAG_ELF_LIBC6,
-            ElfArch::RiscV64 => FLAG_RISCV64_LIB64 | FLAG_ELF_LIBC6,
+            ElfArch::RiscV64 => FLAG_RISCV_FLOAT_ABI_DOUBLE | FLAG_ELF_LIBC6,
             ElfArch::PowerPC64 => FLAG_POWERPC_LIB64 | FLAG_ELF_LIBC6,
             ElfArch::IA64 => FLAG_IA64_LIB64 | FLAG_ELF_LIBC6,
             ElfArch::I686 => FLAG_ELF_LIBC6,
