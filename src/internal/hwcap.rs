@@ -1,4 +1,4 @@
-use crate::elf::ElfArch;
+use crate::internal::elf::ElfArch;
 use crate::Error;
 use std::fs;
 use std::path::{Path, PathBuf};

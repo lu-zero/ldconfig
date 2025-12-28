@@ -1,14 +1,84 @@
+//! Config parsing API.
+//!
+//! Provides high-level interface for parsing ld.so.conf files and getting directory lists.
+
 use crate::Error;
 use camino::{Utf8Path, Utf8PathBuf};
 use std::fs;
 
+/// Library configuration containing directories to scan
 #[derive(Debug, Clone)]
-pub struct Config {
-    pub directories: Vec<Utf8PathBuf>,
-    pub include_patterns: Vec<String>,
+pub struct LibraryConfig {
+    directories: Vec<Utf8PathBuf>,
 }
 
-impl Default for Config {
+impl LibraryConfig {
+    /// Create config from file path with optional prefix
+    pub fn from_file(
+        path: impl AsRef<Utf8Path>,
+        prefix: Option<&Utf8Path>,
+    ) -> Result<Self, Error> {
+        let path = path.as_ref();
+
+        // Parse the main config file
+        let mut config = parse_config_file(path)?;
+
+        // Expand includes
+        let included_dirs = expand_includes(&config)?;
+        config.directories.extend(included_dirs);
+
+        // Apply prefix if provided
+        if let Some(prefix) = prefix {
+            config.directories = config
+                .directories
+                .into_iter()
+                .map(|dir| prefix.join(dir.strip_prefix("/").unwrap_or(&dir)))
+                .collect();
+        }
+
+        Ok(Self {
+            directories: config.directories,
+        })
+    }
+
+    /// Create default config (standard system directories)
+    pub fn default() -> Self {
+        Self {
+            directories: vec![
+                Utf8PathBuf::from("/lib"),
+                Utf8PathBuf::from("/usr/lib"),
+                Utf8PathBuf::from("/lib64"),
+                Utf8PathBuf::from("/usr/lib64"),
+            ],
+        }
+    }
+
+    /// Create config from explicit directory list
+    pub fn from_directories(directories: Vec<Utf8PathBuf>) -> Self {
+        Self { directories }
+    }
+
+    /// Get directories to scan
+    pub fn directories(&self) -> &[Utf8PathBuf] {
+        &self.directories
+    }
+}
+
+impl Default for LibraryConfig {
+    fn default() -> Self {
+        Self::default()
+    }
+}
+
+// Internal parsing structures and functions
+
+#[derive(Debug, Clone)]
+struct RawConfig {
+    directories: Vec<Utf8PathBuf>,
+    include_patterns: Vec<String>,
+}
+
+impl Default for RawConfig {
     fn default() -> Self {
         Self {
             directories: vec![
@@ -22,15 +92,15 @@ impl Default for Config {
     }
 }
 
-pub fn parse_config_file(path: &Utf8Path) -> Result<Config, Error> {
+fn parse_config_file(path: &Utf8Path) -> Result<RawConfig, Error> {
     let content = fs::read_to_string(path)
         .map_err(|e| Error::Config(format!("Failed to read config file: {}", e)))?;
 
     parse_config_content(&content)
 }
 
-pub fn parse_config_content(content: &str) -> Result<Config, Error> {
-    let mut config = Config::default();
+fn parse_config_content(content: &str) -> Result<RawConfig, Error> {
+    let mut config = RawConfig::default();
 
     for line in content.lines() {
         let line = line.trim();
@@ -53,7 +123,7 @@ pub fn parse_config_content(content: &str) -> Result<Config, Error> {
     Ok(config)
 }
 
-pub fn expand_includes(config: &Config) -> Result<Vec<Utf8PathBuf>, Error> {
+fn expand_includes(config: &RawConfig) -> Result<Vec<Utf8PathBuf>, Error> {
     let mut included_dirs = Vec::new();
 
     for pattern in &config.include_patterns {
@@ -77,8 +147,6 @@ pub fn expand_includes(config: &Config) -> Result<Vec<Utf8PathBuf>, Error> {
                         let included_config = parse_config_content(&content)?;
 
                         // Add the directories from this included config
-                        // The directories in the config files are absolute paths (like /lib, /usr/lib)
-                        // We return them as-is, and the caller will apply the appropriate prefix
                         for dir in included_config.directories {
                             included_dirs.push(dir);
                         }
@@ -92,4 +160,32 @@ pub fn expand_includes(config: &Config) -> Result<Vec<Utf8PathBuf>, Error> {
     }
 
     Ok(included_dirs)
+}
+
+// Re-exports for backwards compatibility (temporary)
+pub use LibraryConfig as Config;
+
+pub fn parse_config_file_compat(path: &Utf8Path) -> Result<Config, Error> {
+    let content = fs::read_to_string(path)
+        .map_err(|e| Error::Config(format!("Failed to read config file: {}", e)))?;
+
+    let raw = parse_config_content(&content)?;
+    let included = expand_includes(&raw)?;
+    let mut dirs = raw.directories;
+    dirs.extend(included);
+
+    Ok(Config::from_directories(dirs))
+}
+
+pub fn parse_config_content_compat(content: &str) -> Result<Config, Error> {
+    let raw = parse_config_content(content)?;
+    let included = expand_includes(&raw)?;
+    let mut dirs = raw.directories;
+    dirs.extend(included);
+
+    Ok(Config::from_directories(dirs))
+}
+
+pub fn expand_includes_compat(config: &Config) -> Result<Vec<Utf8PathBuf>, Error> {
+    Ok(config.directories().to_vec())
 }
