@@ -17,9 +17,12 @@ walkdir = "2.5.0"
 bpaf = { version = "0.9", features = ["derive", "bright-color"] }
 thiserror = "2.0.17"
 glob = "0.3.1"
-ld-so-cache = { version = "0.1.0", optional = true }
 camino = "1.2.2"
 
-[features]
-default = []
-ld-so-cache = ["dep:ld-so-cache"]
+[dev-dependencies]
+ld-so-cache = "0.1.0"
+
+# Examples available:
+# - build_cache: Demonstrates building a cache from directories
+# - test_cache_read: Shows how to read and query cache files
+# - compare_caches: Compare two cache files (optionally with ld-so-cache cross-validation)
