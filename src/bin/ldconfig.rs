@@ -1,6 +1,6 @@
 use bpaf::Bpaf;
 use camino::Utf8PathBuf;
-use ldconfig::{CacheBuilder, CacheReader, Error, LibraryConfig, ScanOptions};
+use ldconfig::{Cache, CacheBuilder, Error, LibraryConfig, ScanOptions};
 
 #[derive(Debug, Clone, Bpaf)]
 #[bpaf(options)]
@@ -127,11 +127,11 @@ fn print_cache(options: &Options) -> Result<(), Error> {
         .clone()
         .unwrap_or_else(|| options.prefix.join("etc/ld.so.cache"));
 
-    // Read cache using high-level API
-    let reader = CacheReader::from_file(&cache_path)?;
+    // Read cache using unified Cache API
+    let cache = Cache::from_file(&cache_path)?;
 
     // Print using built-in formatting
-    reader.print(&mut std::io::stdout())?;
+    cache.print(&mut std::io::stdout())?;
 
     Ok(())
 }

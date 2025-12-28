@@ -2,6 +2,7 @@
 //!
 //! Provides high-level interface for scanning directories and building cache data.
 
+use crate::cache::Cache;
 use crate::config::LibraryConfig;
 use crate::internal::cache_format;
 use crate::internal::elf::{parse_elf_file, ElfLibrary};
@@ -10,7 +11,6 @@ use crate::internal::scanner::{
     should_include_symlink,
 };
 use crate::internal::symlinks::update_symlinks;
-use crate::writer::Cache;
 use crate::Error;
 use camino::Utf8PathBuf;
 
@@ -143,7 +143,7 @@ impl CacheBuilder {
     /// Build cache data (consumes builder)
     pub fn build(self) -> Result<Cache, Error> {
         let data = cache_format::build_cache(&self.libraries, self.prefix.as_deref());
-        Ok(Cache::from_bytes(data))
+        Ok(Cache::from_bytes_raw(data))
     }
 }
 

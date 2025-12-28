@@ -12,10 +12,10 @@
 //! # Example: Read a cache file
 //!
 //! ```no_run
-//! use ldconfig::CacheReader;
+//! use ldconfig::Cache;
 //!
-//! let reader = CacheReader::from_file("/etc/ld.so.cache")?;
-//! reader.print(&mut std::io::stdout())?;
+//! let cache = Cache::from_file("/etc/ld.so.cache")?;
+//! cache.print(&mut std::io::stdout())?;
 //! # Ok::<(), ldconfig::Error>(())
 //! ```
 //!
@@ -35,31 +35,29 @@
 mod internal;
 
 pub mod builder;
+pub mod cache;
 pub mod config;
 pub mod error;
-pub mod reader;
-pub mod writer;
 
 // Backwards compatibility - old modules (will be removed in future version)
 #[doc(hidden)]
-pub mod cache;
-#[doc(hidden)]
 pub mod cache_reader;
+#[doc(hidden)]
+pub mod reader;
+#[doc(hidden)]
+pub mod writer;
 
 // Main public API exports
 pub use builder::{CacheBuilder, ScanOptions};
+pub use cache::{Cache, CacheEntry, CacheInfo};
 pub use config::LibraryConfig;
 pub use error::Error;
-pub use reader::{CacheEntry, CacheInfo, CacheReader};
-pub use writer::Cache;
 
 // Backwards compatibility exports (will be removed in future version)
 #[doc(hidden)]
-pub use cache::{build_cache, CacheEntry as OldCacheEntry};
+pub use cache::build_cache;
 #[doc(hidden)]
-pub use cache_reader::{
-    parse_cache_data, read_cache_file, CacheInfo as OldCacheInfo, CacheEntry as OldReaderEntry,
-};
+pub use cache_reader::{parse_cache_data, read_cache_file};
 #[doc(hidden)]
 pub use config::{
     expand_includes_compat as expand_includes, parse_config_content_compat as parse_config_content,
@@ -76,3 +74,7 @@ pub use internal::scanner::{
 };
 #[doc(hidden)]
 pub use internal::symlinks::{create_symlink, update_symlinks, SymlinkAction, SymlinkActionType};
+
+// Backwards compat aliases
+#[doc(hidden)]
+pub use cache::Cache as CacheReader;
