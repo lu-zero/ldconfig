@@ -35,7 +35,6 @@ pub enum ElfArch {
     AArch64,
     RiscV64,
     PowerPC64,
-    IA64,
     I686,
     ARM,
 }
@@ -119,7 +118,6 @@ fn detect_architecture(elf: &Elf) -> Result<ElfArch, Error> {
         EM_AARCH64 => Ok(ElfArch::AArch64),
         EM_RISCV => Ok(ElfArch::RiscV64),
         EM_PPC64 => Ok(ElfArch::PowerPC64),
-        EM_IA_64 => Ok(ElfArch::IA64),
         EM_386 => Ok(ElfArch::I686),
         EM_ARM => Ok(ElfArch::ARM),
         _ => {
