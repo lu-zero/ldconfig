@@ -15,7 +15,7 @@
 //! use ldconfig::Cache;
 //!
 //! let cache = Cache::from_file("/etc/ld.so.cache")?;
-//! cache.print(&mut std::io::stdout())?;
+//! println!("{}", cache);
 //! # Ok::<(), ldconfig::Error>(())
 //! ```
 //!

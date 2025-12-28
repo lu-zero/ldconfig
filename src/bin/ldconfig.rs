@@ -130,8 +130,8 @@ fn print_cache(options: &Options) -> Result<(), Error> {
     // Read cache using unified Cache API
     let cache = Cache::from_file(&cache_path)?;
 
-    // Print using built-in formatting
-    cache.print(&mut std::io::stdout())?;
+    // Print using Display trait
+    println!("{}", cache);
 
     Ok(())
 }
