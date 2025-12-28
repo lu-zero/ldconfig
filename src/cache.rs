@@ -1,5 +1,5 @@
 use crate::elf::{ElfArch, ElfLibrary};
-use camino::Utf8Path;
+use camino::{Utf8Path, Utf8PathBuf};
 use std::collections::HashMap;
 
 const CACHE_MAGIC: [u8; 20] = *b"glibc-ld.so.cache1.1";
@@ -55,11 +55,14 @@ pub fn build_cache(libraries: &[ElfLibrary], prefix: Option<&Utf8Path>) -> Vec<u
     cache.extend_from_slice(&[0u8; 12]);
 
     // Sort libraries FIRST before building anything
-    // Primary: SONAME alphabetical
+    // Primary: filename in REVERSE alphabetical order (glibc behavior)
+    //          This puts libfoo.so.1 BEFORE libfoo.so
     // Secondary: hwcap priority (higher hwcap = more specialized, comes first)
     let mut sorted_libs = libraries.to_vec();
     sorted_libs.sort_by(|a, b| {
-        match a.soname.cmp(&b.soname) {
+        let filename_a = a.path.file_name().unwrap_or(a.path.as_str());
+        let filename_b = b.path.file_name().unwrap_or(b.path.as_str());
+        match filename_b.cmp(filename_a) {  // REVERSED: b.cmp(a) instead of a.cmp(b)
             std::cmp::Ordering::Equal => {
                 // Higher hwcap comes first (more specialized)
                 b.hwcap.unwrap_or(0).cmp(&a.hwcap.unwrap_or(0))
@@ -73,19 +76,39 @@ pub fn build_cache(libraries: &[ElfLibrary], prefix: Option<&Utf8Path>) -> Vec<u
     let mut string_offsets = HashMap::new();
 
     for lib in &sorted_libs {
-        add_string(&mut string_table, &mut string_offsets, &lib.soname);
+        // Use filename as the cache key
+        // This allows lookups by any symlink name (libfoo.so, libfoo.so.1, etc.)
+        let filename = lib.path.file_name().unwrap_or(lib.path.as_str());
+        add_string(&mut string_table, &mut string_offsets, filename);
 
         // Convert the path to an absolute path for the cache
         // The real ldconfig uses absolute paths in the cache
+        // Canonicalize the DIRECTORY only (not the filename symlink)
+        let dir = lib.path.parent().unwrap_or_else(|| Utf8Path::new(""));
+        let filename_part = lib.path.file_name().unwrap_or(lib.path.as_str());
+
+        let canonical_dir = dir.as_std_path().canonicalize()
+            .ok()
+            .and_then(|p| Utf8PathBuf::try_from(p).ok())
+            .unwrap_or_else(|| dir.to_path_buf());
+
+        let canonical_path = canonical_dir.join(filename_part);
+
         let path_to_add = if let Some(prefix) = prefix {
-            if let Ok(stripped) = lib.path.strip_prefix(prefix) {
+            // Get canonical prefix for comparison
+            let canonical_prefix = prefix.as_std_path().canonicalize()
+                .ok()
+                .and_then(|p| Utf8PathBuf::try_from(p).ok())
+                .unwrap_or_else(|| prefix.to_path_buf());
+
+            if let Ok(stripped) = canonical_path.strip_prefix(&canonical_prefix) {
                 // Convert to absolute path by prepending '/'
                 format!("/{}", stripped)
             } else {
-                lib.path.to_string()
+                canonical_path.to_string()
             }
         } else {
-            lib.path.to_string()
+            canonical_path.to_string()
         };
 
         add_string(&mut string_table, &mut string_offsets, &path_to_add);
@@ -99,24 +122,41 @@ pub fn build_cache(libraries: &[ElfLibrary], prefix: Option<&Utf8Path>) -> Vec<u
     // Note: header_size = 48, entry_size = 24 for reference
 
     for lib in &sorted_libs {
-        // Look up string offsets for SONAME and path (these are relative to string table start)
-        let key_relative_offset = *string_offsets.get(&lib.soname).unwrap_or_else(|| {
+        // Look up string offsets for filename and path (these are relative to string table start)
+        let filename = lib.path.file_name().unwrap_or(lib.path.as_str());
+        let key_relative_offset = *string_offsets.get(filename).unwrap_or_else(|| {
             eprintln!(
-                "WARNING: SONAME '{}' not found in string offsets map!",
-                lib.soname
+                "WARNING: Filename '{}' not found in string offsets map!",
+                filename
             );
             &0u32
         });
 
-        // Convert the path to an absolute path for the cache
+        // Convert the path to an absolute path for the cache (same logic as above)
+        // Canonicalize the DIRECTORY only (not the filename symlink)
+        let dir = lib.path.parent().unwrap_or_else(|| Utf8Path::new(""));
+        let filename_part = lib.path.file_name().unwrap_or(lib.path.as_str());
+
+        let canonical_dir = dir.as_std_path().canonicalize()
+            .ok()
+            .and_then(|p| Utf8PathBuf::try_from(p).ok())
+            .unwrap_or_else(|| dir.to_path_buf());
+
+        let canonical_path = canonical_dir.join(filename_part);
+
         let path_to_add = if let Some(prefix) = prefix {
-            if let Ok(stripped) = lib.path.strip_prefix(prefix) {
+            let canonical_prefix = prefix.as_std_path().canonicalize()
+                .ok()
+                .and_then(|p| Utf8PathBuf::try_from(p).ok())
+                .unwrap_or_else(|| prefix.to_path_buf());
+
+            if let Ok(stripped) = canonical_path.strip_prefix(&canonical_prefix) {
                 format!("/{}", stripped)
             } else {
-                lib.path.to_string()
+                canonical_path.to_string()
             }
         } else {
-            lib.path.to_string()
+            canonical_path.to_string()
         };
 
         let value_relative_offset = *string_offsets.get(&path_to_add).unwrap_or_else(|| {

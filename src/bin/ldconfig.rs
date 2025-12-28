@@ -155,7 +155,8 @@ fn main() -> Result<(), LdconfigError> {
         }
     }
 
-    let scan_dirs = config.directories.clone();
+    // Deduplicate directories: skip directories that are symlinks to other dirs already in the list
+    let scan_dirs = deduplicate_scan_directories(&config.directories);
 
     if options.verbose {
         println!("Scanning directories: {:?}", scan_dirs);
@@ -322,26 +323,41 @@ fn print_cache(options: &Options) -> Result<(), LdconfigError> {
     Ok(())
 }
 
-/// Deduplicate libraries keeping one entry per (SONAME, canonical_directory) pair.
-/// Canonicalization ensures that symlinked directories (like lib64 -> lib) are treated as the same.
+/// Deduplicate scan directories by removing directories that are symlinks
+/// to canonical paths already in the list. Keep the CANONICAL path, not the symlink.
+fn deduplicate_scan_directories(dirs: &[Utf8PathBuf]) -> Vec<Utf8PathBuf> {
+    use std::collections::HashMap;
+
+    let mut canonical_to_first: HashMap<Utf8PathBuf, Utf8PathBuf> = HashMap::new();
+
+    for dir in dirs {
+        // Get canonical path
+        let canonical = if let Ok(canon) = dir.as_std_path().canonicalize() {
+            Utf8PathBuf::try_from(canon).unwrap_or_else(|_| dir.clone())
+        } else {
+            dir.clone()
+        };
+
+        // Keep the canonical path (not the symlink)
+        canonical_to_first.entry(canonical.clone()).or_insert(canonical);
+    }
+
+    canonical_to_first.into_values().collect()
+}
+
+/// Deduplicate libraries by (directory, filename) pair
+/// This removes exact duplicates but keeps all symlinks and matching real files
 fn deduplicate_libraries(libraries: &[ElfLibrary]) -> Vec<ElfLibrary> {
     use std::collections::HashMap;
 
-    let mut unique_libs: HashMap<(String, Utf8PathBuf), ElfLibrary> = HashMap::new();
+    let mut unique_libs: HashMap<(Utf8PathBuf, String), ElfLibrary> = HashMap::new();
 
     for lib in libraries {
-        let dir = lib.path.parent().unwrap_or_else(|| "".as_ref());
+        let dir = lib.path.parent().unwrap_or_else(|| "".as_ref()).to_owned();
+        let filename = lib.path.file_name().unwrap_or(lib.path.as_str()).to_string();
+        let key = (dir, filename);
 
-        // Canonicalize directory to handle symlinks (lib64 -> lib)
-        let canonical_dir = if let Ok(canon) = dir.as_std_path().canonicalize() {
-            Utf8PathBuf::try_from(canon).unwrap_or_else(|_| dir.to_owned())
-        } else {
-            dir.to_owned()
-        };
-
-        let key = (lib.soname.clone(), canonical_dir);
-
-        // Keep first occurrence per (SONAME, canonical_directory) pair
+        // Keep first occurrence
         unique_libs.entry(key).or_insert_with(|| lib.clone());
     }
 
@@ -368,10 +384,43 @@ fn scan_hwcap_directories(dirs: &[Utf8PathBuf]) -> Result<Vec<ElfLibrary>, Ldcon
 
                 if path.is_file() && should_scan_library(&path) {
                     if let Ok(mut lib) = parse_elf_file(&path) {
-                        // Override hwcap from path detection with proper architecture-aware value
-                        let arch = lib.arch;
-                        lib.hwcap = Some(hwcap.to_bitmask(arch));
-                        hwcap_libraries.push(lib);
+                        let is_symlink = std::fs::symlink_metadata(&path)
+                            .map(|m| m.file_type().is_symlink())
+                            .unwrap_or(false);
+                        let filename = path.file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("");
+
+                        let should_include = if is_symlink {
+                            // For symlinks, check the pattern
+                            if filename.ends_with(".so") && !filename.contains(".so.") {
+                                // Bare .so symlink: include if target has same base name + .so.VERSION pattern
+                                if let Ok(target) = std::fs::read_link(&path) {
+                                    let target_name = target.file_name()
+                                        .and_then(|n| n.to_str())
+                                        .unwrap_or("");
+                                    let base = filename.trim_end_matches(".so");
+                                    // Include if target is like libfoo.so.X (standard pattern)
+                                    // Exclude if target is like libfoo-X.so (dash-version) or libbar.so (different base)
+                                    target_name.starts_with(&format!("{}.", base)) && target_name.contains(".so.")
+                                } else {
+                                    false
+                                }
+                            } else {
+                                // Versioned symlink (.so.X): include only if filename matches SONAME
+                                filename == lib.soname
+                            }
+                        } else {
+                            // Real file: include only if filename matches SONAME
+                            filename == lib.soname
+                        };
+
+                        if should_include {
+                            // Override hwcap from path detection with proper architecture-aware value
+                            let arch = lib.arch;
+                            lib.hwcap = Some(hwcap.to_bitmask(arch));
+                            hwcap_libraries.push(lib);
+                        }
                     }
                 }
             }
@@ -395,7 +444,40 @@ fn scan_libraries(dirs: &[Utf8PathBuf]) -> Result<Vec<ElfLibrary>, LdconfigError
 
             if path.is_file() && should_scan_library(&path) {
                 if let Ok(lib) = parse_elf_file(&path) {
-                    libraries.push(lib);
+                    let is_symlink = std::fs::symlink_metadata(&path)
+                        .map(|m| m.file_type().is_symlink())
+                        .unwrap_or(false);
+                    let filename = path.file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("");
+
+                    let should_include = if is_symlink {
+                        // For symlinks, check the pattern
+                        if filename.ends_with(".so") && !filename.contains(".so.") {
+                            // Bare .so symlink: include if target has same base name + .so.VERSION pattern
+                            if let Ok(target) = std::fs::read_link(&path) {
+                                let target_name = target.file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or("");
+                                let base = filename.trim_end_matches(".so");
+                                // Include if target is like libfoo.so.X (standard pattern)
+                                // Exclude if target is like libfoo-X.so (dash-version) or libbar.so (different base)
+                                target_name.starts_with(&format!("{}.", base)) && target_name.contains(".so.")
+                            } else {
+                                false
+                            }
+                        } else {
+                            // Versioned symlink (.so.X): include only if filename matches SONAME
+                            filename == lib.soname
+                        }
+                    } else {
+                        // Real file: include only if filename matches SONAME
+                        filename == lib.soname
+                    };
+
+                    if should_include {
+                        libraries.push(lib);
+                    }
                 }
             }
         }
