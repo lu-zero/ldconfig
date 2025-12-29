@@ -7,7 +7,7 @@
 //! - Extension section handling
 
 use crate::elf::{ElfArch, ElfLibrary};
-use crate::Error;
+use crate::error::Error;
 use camino::{Utf8Path, Utf8PathBuf};
 use std::collections::HashMap;
 use tracing::{trace, warn};

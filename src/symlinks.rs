@@ -1,5 +1,5 @@
 use crate::elf::ElfLibrary;
-use crate::Error;
+use crate::error::Error;
 use camino::Utf8PathBuf;
 use std::fs;
 use std::path::Path;

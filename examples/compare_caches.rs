@@ -1,3 +1,4 @@
+use anyhow::Error;
 /// Example: Compare two cache files
 ///
 /// This example compares two ld.so.cache files to verify compatibility.
@@ -6,7 +7,7 @@
 /// Usage: cargo run --example compare_caches <our_cache> <real_cache>
 use bpaf::Bpaf;
 use ld_so_cache::parsers::parse_ld_cache;
-use ldconfig::{Cache, Error};
+use ldconfig::Cache;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Bpaf)]

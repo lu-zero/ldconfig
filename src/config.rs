@@ -2,7 +2,7 @@
 //!
 //! Provides high-level interface for parsing ld.so.conf files and getting directory lists.
 
-use crate::Error;
+use crate::error::Error;
 use camino::{Utf8Path, Utf8PathBuf};
 use std::fs;
 use std::ops::Deref;

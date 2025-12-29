@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 use crate::elf::ElfArch;
-use crate::Error;
+use crate::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 

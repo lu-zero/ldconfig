@@ -29,7 +29,7 @@ use crate::scanner::{
     deduplicate_libraries, deduplicate_scan_directories, scan_all_libraries, should_include_symlink,
 };
 use crate::symlinks;
-use crate::{Error, SearchPaths};
+use crate::{error::Error, SearchPaths};
 use bon::bon;
 use camino::Utf8Path;
 use std::fmt;

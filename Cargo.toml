@@ -23,6 +23,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
+anyhow = "1.0.100"
 ld-so-cache = "0.1.0"
 
 # Examples available:

@@ -47,4 +47,11 @@ mod error;
 // Main public API exports
 pub use cache::{Cache, CacheBuilder, CacheEntry, CacheInfo};
 pub use config::SearchPaths;
-pub use error::Error;
+
+/// Errors encountered while reading or writing the cache
+///
+/// The error is made anonymous on purpose since we depend on
+/// many third-party crates.
+#[derive(thiserror::Error, Debug)]
+#[error(transparent)]
+pub struct Error(#[from] error::Error);

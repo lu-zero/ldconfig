@@ -1,6 +1,6 @@
 use crate::elf::{parse_elf_file, ElfLibrary};
+use crate::error::Error;
 use crate::hwcap::detect_hwcap_dirs;
-use crate::Error;
 use camino::Utf8PathBuf;
 use std::collections::HashMap;
 use std::path::Path;
