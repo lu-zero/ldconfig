@@ -1,6 +1,6 @@
 use bpaf::Bpaf;
 use camino::Utf8PathBuf;
-use ldconfig::{Cache, Error, LibraryConfig};
+use ldconfig::{Cache, Error, SearchPaths};
 use tracing::{debug, info, warn, Level};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
@@ -85,27 +85,26 @@ fn main() -> Result<(), Error> {
     debug!("Config file: {}", config_path);
 
     // Load configuration with prefix handling
-    let config = if config_path.exists() {
+    let search_paths = if config_path.exists() {
         info!("Loading configuration from: {}", config_path);
-        LibraryConfig::from_file(&config_path, Some(options.prefix.as_path()))?
+        SearchPaths::from_file(&config_path, Some(options.prefix.as_path()))?
     } else {
         warn!("No config file found, using default configuration");
         // Apply prefix to default directories
-        let default = LibraryConfig::default();
+        let default = SearchPaths::default();
         let prefixed_dirs: Vec<_> = default
-            .directories()
             .iter()
             .map(|dir| options.prefix.join(dir.strip_prefix("/").unwrap_or(dir)))
             .collect();
-        LibraryConfig::from_directories(prefixed_dirs)
+        SearchPaths::new(prefixed_dirs)
     };
 
-    debug!("Directories to scan: {:?}", config.directories());
+    debug!("Directories to scan: {:?}", &*search_paths);
 
     let cache = Cache::builder()
         .prefix(options.prefix.as_path())
         .dry_run(options.dry_run)
-        .build(&config)?;
+        .build(&search_paths)?;
 
     info!("Built cache with {} bytes", cache.size());
 

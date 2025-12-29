@@ -29,7 +29,7 @@ use crate::scanner::{
     deduplicate_libraries, deduplicate_scan_directories, scan_all_libraries, should_include_symlink,
 };
 use crate::symlinks;
-use crate::{Error, LibraryConfig};
+use crate::{Error, SearchPaths};
 use bon::bon;
 use camino::Utf8Path;
 use std::fmt;
@@ -102,7 +102,7 @@ impl Cache {
     pub fn new(
         /// Directories to scan
         #[builder(finish_fn)]
-        config: &LibraryConfig,
+        search_paths: &SearchPaths,
         /// Update symlinks in directories
         #[builder(default = true)]
         update_symlinks: bool,
@@ -112,7 +112,7 @@ impl Cache {
         /// Root prefix
         prefix: &Utf8Path,
     ) -> Result<Self, Error> {
-        let scan_dirs = deduplicate_scan_directories(config.directories());
+        let scan_dirs = deduplicate_scan_directories(search_paths);
 
         debug!("Scanning directories: {:?}", scan_dirs);
 

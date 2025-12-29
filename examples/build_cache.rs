@@ -7,7 +7,7 @@
 ///
 /// Usage: cargo run --example build_cache -- <prefix>
 use camino::Utf8PathBuf;
-use ldconfig::{Cache, Error, LibraryConfig};
+use ldconfig::{Cache, Error, SearchPaths};
 use std::env;
 
 fn main() -> Result<(), Error> {
@@ -22,28 +22,27 @@ fn main() -> Result<(), Error> {
 
     // Step 1: Load configuration with automatic prefix handling
     let config_path = prefix.join("etc/ld.so.conf");
-    let config = if config_path.exists() {
+    let search_paths = if config_path.exists() {
         println!("Loading config from: {}", config_path);
-        LibraryConfig::from_file(&config_path, Some(prefix.as_path()))?
+        SearchPaths::from_file(&config_path, Some(prefix.as_path()))?
     } else {
         println!("No config file found, using default directories");
         // Manually apply prefix to default directories
-        let default = LibraryConfig::default();
+        let default = SearchPaths::default();
         let prefixed_dirs: Vec<_> = default
-            .directories()
             .iter()
             .map(|dir| prefix.join(dir.strip_prefix("/").unwrap_or(dir)))
             .collect();
-        LibraryConfig::from_directories(prefixed_dirs)
+        SearchPaths::new(prefixed_dirs)
     };
 
-    println!("Directories to scan: {:?}", config.directories());
+    println!("Directories to scan: {:?}", &*search_paths);
 
     let cache = Cache::builder()
         .update_symlinks(false)
         .dry_run(true)
         .prefix(prefix.as_path())
-        .build(&config)?;
+        .build(&search_paths)?;
 
     println!("Cache size: {} bytes", cache.size());
 

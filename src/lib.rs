@@ -22,13 +22,13 @@
 //! # Example: Build and write a cache
 //!
 //! ```no_run
-//! use ldconfig::{LibraryConfig, Cache};
+//! use ldconfig::{SearchPaths, Cache};
 //! use camino::Utf8Path;
 //!
-//! let config = LibraryConfig::from_file("/etc/ld.so.conf", None)?;
+//! let search_paths = SearchPaths::from_file("/etc/ld.so.conf", None)?;
 //! let cache = Cache::builder()
 //!     .prefix(Utf8Path::new("/"))
-//!     .build(&config)?;
+//!     .build(&search_paths)?;
 //! cache.write_to_file("/etc/ld.so.cache")?;
 //! # Ok::<(), ldconfig::Error>(())
 //! ```
@@ -46,5 +46,5 @@ pub mod error;
 
 // Main public API exports
 pub use cache::{Cache, CacheEntry, CacheInfo};
-pub use config::LibraryConfig;
+pub use config::SearchPaths;
 pub use error::Error;

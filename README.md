@@ -78,15 +78,16 @@ for entry in cache.find("libc") {
 ### Build and write a cache
 
 ```rust
-use ldconfig::{LibraryConfig, CacheBuilder, ScanOptions};
+use ldconfig::{SearchPaths, Cache};
+use camino::Utf8Path;
 
 // Parse ld.so.conf
-let config = LibraryConfig::from_file("/etc/ld.so.conf", None)?;
+let search_paths = SearchPaths::from_file("/etc/ld.so.conf", None)?;
 
 // Build cache by scanning directories
-let cache = CacheBuilder::new()
-    .scan_directories(&config, &ScanOptions::default())?
-    .build()?;
+let cache = Cache::builder()
+    .prefix(Utf8Path::new("/"))
+    .build(&search_paths)?;
 
 // Write to file
 cache.write_to_file("/etc/ld.so.cache")?;
@@ -125,25 +126,15 @@ impl Cache {
 impl fmt::Display for Cache { ... }
 ```
 
-### `CacheBuilder` - Building caches
+### `SearchPaths` - Configuration parsing
 ```rust
-pub struct CacheBuilder { ... }
+pub struct SearchPaths { ... }
 
-impl CacheBuilder {
-    pub fn new() -> Self;
-    pub fn with_prefix(self, prefix: Utf8PathBuf) -> Self;
-    pub fn scan_directories(&mut self, config: &LibraryConfig, options: &ScanOptions) -> Result<&mut Self, Error>;
-    pub fn build(self) -> Result<Cache, Error>;
-}
-```
-
-### `LibraryConfig` - Configuration parsing
-```rust
-pub struct LibraryConfig { ... }
-
-impl LibraryConfig {
+impl SearchPaths {
     pub fn from_file(path: impl AsRef<Utf8Path>, prefix: Option<&Utf8Path>) -> Result<Self, Error>;
-    pub fn directories(&self) -> &[Utf8PathBuf];
+    pub fn new(directories: Vec<Utf8PathBuf>) -> Self;
+
+    // Also implements Deref<Target = [Utf8PathBuf]> for transparent slice access
 }
 ```
 

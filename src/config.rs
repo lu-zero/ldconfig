@@ -5,15 +5,18 @@
 use crate::Error;
 use camino::{Utf8Path, Utf8PathBuf};
 use std::fs;
+use std::ops::Deref;
 use tracing::warn;
 
-/// Library configuration containing directories to scan
+/// List of directories to scan for libraries
+///
+/// This is a simple wrapper around `Vec<Utf8PathBuf>` that provides
+/// convenient constructors for creating directory lists from config files
+/// or defaults.
 #[derive(Debug, Clone)]
-pub struct LibraryConfig {
-    directories: Vec<Utf8PathBuf>,
-}
+pub struct SearchPaths(Vec<Utf8PathBuf>);
 
-impl LibraryConfig {
+impl SearchPaths {
     /// Create config from file path with optional prefix
     pub fn from_file(
         path: impl AsRef<Utf8Path>,
@@ -37,37 +40,44 @@ impl LibraryConfig {
                 .collect();
         }
 
-        Ok(Self {
-            directories: config.directories,
-        })
-    }
-
-    /// Create default config (standard system directories)
-    pub fn default() -> Self {
-        Self {
-            directories: vec![
-                Utf8PathBuf::from("/lib"),
-                Utf8PathBuf::from("/usr/lib"),
-                Utf8PathBuf::from("/lib64"),
-                Utf8PathBuf::from("/usr/lib64"),
-            ],
-        }
+        Ok(Self(config.directories))
     }
 
     /// Create config from explicit directory list
-    pub fn from_directories(directories: Vec<Utf8PathBuf>) -> Self {
-        Self { directories }
-    }
-
-    /// Get directories to scan
-    pub fn directories(&self) -> &[Utf8PathBuf] {
-        &self.directories
+    pub fn new(directories: Vec<Utf8PathBuf>) -> Self {
+        Self(directories)
     }
 }
 
-impl Default for LibraryConfig {
+impl Default for SearchPaths {
+    /// Create default config (standard system directories)
     fn default() -> Self {
-        Self::default()
+        Self(vec![
+            Utf8PathBuf::from("/lib"),
+            Utf8PathBuf::from("/usr/lib"),
+            Utf8PathBuf::from("/lib64"),
+            Utf8PathBuf::from("/usr/lib64"),
+        ])
+    }
+}
+
+impl Deref for SearchPaths {
+    type Target = [Utf8PathBuf];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl AsRef<[Utf8PathBuf]> for SearchPaths {
+    fn as_ref(&self) -> &[Utf8PathBuf] {
+        &self.0
+    }
+}
+
+impl From<Vec<Utf8PathBuf>> for SearchPaths {
+    fn from(directories: Vec<Utf8PathBuf>) -> Self {
+        Self(directories)
     }
 }
 
