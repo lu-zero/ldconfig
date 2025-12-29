@@ -40,11 +40,11 @@ pub(crate) mod hwcap;
 pub(crate) mod scanner;
 pub(crate) mod symlinks;
 
-pub mod cache;
-pub mod config;
-pub mod error;
+mod cache;
+mod config;
+mod error;
 
 // Main public API exports
-pub use cache::{Cache, CacheEntry, CacheInfo};
+pub use cache::{Cache, CacheBuilder, CacheEntry, CacheInfo};
 pub use config::SearchPaths;
 pub use error::Error;
