@@ -23,12 +23,12 @@
 //! # Ok::<(), ldconfig::Error>(())
 //! ```
 
-use crate::internal::cache_format::{self, CacheInfo as InternalCacheInfo};
-use crate::internal::elf::parse_elf_file;
-use crate::internal::scanner::{
+use crate::cache_format::{self, CacheInfo as InternalCacheInfo};
+use crate::elf::parse_elf_file;
+use crate::scanner::{
     deduplicate_libraries, deduplicate_scan_directories, scan_all_libraries, should_include_symlink,
 };
-use crate::internal::symlinks;
+use crate::symlinks;
 use crate::{Error, LibraryConfig};
 use bon::bon;
 use camino::Utf8Path;
@@ -70,7 +70,7 @@ pub struct Cache {
 /// Iterator over cache entries
 pub struct CacheEntries<'a> {
     cache: &'a Cache,
-    entries: Option<std::slice::Iter<'a, crate::internal::cache_format::CacheEntry>>,
+    entries: Option<std::slice::Iter<'a, crate::cache_format::CacheEntry>>,
 }
 
 impl<'a> Iterator for CacheEntries<'a> {

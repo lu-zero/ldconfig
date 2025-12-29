@@ -2,7 +2,7 @@
 ///!
 ///! Provides high-level interface for reading and exploring ld.so.cache files.
 
-use crate::internal::cache_format::{self, CacheInfo as InternalCacheInfo};
+use crate::cache_format::{self, CacheInfo as InternalCacheInfo};
 use crate::Error;
 use std::fs;
 use std::io::Write;

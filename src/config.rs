@@ -162,31 +162,3 @@ fn expand_includes(config: &RawConfig) -> Result<Vec<Utf8PathBuf>, Error> {
 
     Ok(included_dirs)
 }
-
-// Re-exports for backwards compatibility (temporary)
-pub use LibraryConfig as Config;
-
-pub fn parse_config_file_compat(path: &Utf8Path) -> Result<Config, Error> {
-    let content = fs::read_to_string(path)
-        .map_err(|e| Error::Config(format!("Failed to read config file: {}", e)))?;
-
-    let raw = parse_config_content(&content)?;
-    let included = expand_includes(&raw)?;
-    let mut dirs = raw.directories;
-    dirs.extend(included);
-
-    Ok(Config::from_directories(dirs))
-}
-
-pub fn parse_config_content_compat(content: &str) -> Result<Config, Error> {
-    let raw = parse_config_content(content)?;
-    let included = expand_includes(&raw)?;
-    let mut dirs = raw.directories;
-    dirs.extend(included);
-
-    Ok(Config::from_directories(dirs))
-}
-
-pub fn expand_includes_compat(config: &Config) -> Result<Vec<Utf8PathBuf>, Error> {
-    Ok(config.directories().to_vec())
-}

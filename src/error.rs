@@ -10,7 +10,7 @@ pub enum Error {
     Goblin(#[from] goblin::error::Error),
 
     #[error("ELF error: {0}")]
-    Elf(#[from] crate::internal::elf::Error),
+    Elf(#[from] crate::elf::Error),
 
     #[error("Cache write error: {0}")]
     CacheWrite(String),

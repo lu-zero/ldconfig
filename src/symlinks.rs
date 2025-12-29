@@ -1,4 +1,4 @@
-use crate::internal::elf::ElfLibrary;
+use crate::elf::ElfLibrary;
 use crate::Error;
 use camino::Utf8PathBuf;
 use std::fs;

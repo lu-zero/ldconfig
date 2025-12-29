@@ -1,5 +1,5 @@
-use crate::internal::elf::{parse_elf_file, ElfLibrary};
-use crate::internal::hwcap::detect_hwcap_dirs;
+use crate::elf::{parse_elf_file, ElfLibrary};
+use crate::hwcap::detect_hwcap_dirs;
 use crate::Error;
 use camino::Utf8PathBuf;
 use std::collections::HashMap;
