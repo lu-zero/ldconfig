@@ -23,11 +23,9 @@
 //!
 //! ```no_run
 //! use ldconfig::{SearchPaths, Cache};
-//! use camino::Utf8Path;
 //!
 //! let search_paths = SearchPaths::from_file("/etc/ld.so.conf", None)?;
 //! let cache = Cache::builder()
-//!     .prefix(Utf8Path::new("/"))
 //!     .build(&search_paths)?;
 //! cache.write_to_file("/etc/ld.so.cache")?;
 //! # Ok::<(), ldconfig::Error>(())

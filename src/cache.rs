@@ -110,6 +110,7 @@ impl Cache {
         /// Dry run mode (don't make changes)
         dry_run: bool,
         /// Root prefix
+        #[builder(into, default = "/")]
         prefix: &Utf8Path,
     ) -> Result<Self, Error> {
         let scan_dirs = deduplicate_scan_directories(search_paths);
