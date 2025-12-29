@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use crate::internal::elf::ElfArch;
 use crate::Error;
 use std::fs;
@@ -82,6 +83,7 @@ pub fn detect_hwcap_dirs(base_dir: &Path) -> Result<Vec<(PathBuf, HwCap)>, Error
     Ok(hwcap_dirs)
 }
 
+// TODO wire in
 pub fn scan_hwcap_libraries(
     hwcap_dirs: &[(PathBuf, HwCap)],
 ) -> Result<Vec<(PathBuf, HwCap)>, Error> {

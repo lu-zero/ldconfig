@@ -8,9 +8,9 @@
 
 use crate::internal::elf::{ElfArch, ElfLibrary};
 use crate::Error;
-use tracing::warn;
 use camino::{Utf8Path, Utf8PathBuf};
 use std::collections::HashMap;
+use tracing::{trace, warn};
 
 pub(crate) const CACHE_MAGIC: [u8; 20] = *b"glibc-ld.so.cache1.1";
 
@@ -61,17 +61,8 @@ pub struct CacheEntry {
 }
 
 #[derive(Debug, Clone)]
-pub struct CacheHeader {
-    pub magic: String,
-    pub nlibs: u32,
-    pub len_strings: u32,
-}
-
-#[derive(Debug, Clone)]
 pub struct CacheInfo {
-    pub header: CacheHeader,
     pub entries: Vec<CacheEntry>,
-    pub string_table: Vec<String>,
     pub generator: Option<String>,
 }
 
@@ -179,10 +170,7 @@ pub(crate) fn build_cache(libraries: &[ElfLibrary], prefix: &Utf8Path) -> Vec<u8
         // Look up string offsets for filename and path (these are relative to string table start)
         let filename = lib.path.file_name().unwrap_or(lib.path.as_str());
         let key_relative_offset = *string_offsets.get(filename).unwrap_or_else(|| {
-            warn!(
-                "Filename '{}' not found in string offsets map!",
-                filename
-            );
+            warn!("Filename '{}' not found in string offsets map!", filename);
             &0u32
         });
 
@@ -217,10 +205,7 @@ pub(crate) fn build_cache(libraries: &[ElfLibrary], prefix: &Utf8Path) -> Vec<u8
         };
 
         let value_relative_offset = *string_offsets.get(&path_to_add).unwrap_or_else(|| {
-            warn!(
-                "PATH '{}' not found in string offsets map!",
-                path_to_add
-            );
+            warn!("PATH '{}' not found in string offsets map!", path_to_add);
             &0u32
         });
 
@@ -296,11 +281,7 @@ pub(crate) fn parse_cache(data: &[u8]) -> Result<CacheInfo, Error> {
     let nlibs = u32::from_ne_bytes([data[20], data[21], data[22], data[23]]);
     let len_strings = u32::from_ne_bytes([data[24], data[25], data[26], data[27]]);
 
-    let header = CacheHeader {
-        magic,
-        nlibs,
-        len_strings,
-    };
+    trace!("magic {magic}, nlibs {nlibs}");
 
     // Parse entries
     let mut entries = Vec::new();
@@ -424,12 +405,9 @@ pub(crate) fn parse_cache(data: &[u8]) -> Result<CacheInfo, Error> {
         }
     }
 
-    Ok(CacheInfo {
-        header,
-        entries,
-        string_table: strings,
-        generator,
-    })
+    let info = CacheInfo { entries, generator };
+
+    Ok(info)
 }
 
 /// Convert architecture to cache flags
