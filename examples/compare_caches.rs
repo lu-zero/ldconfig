@@ -98,10 +98,8 @@ fn main() -> Result<(), Error> {
     compare_caches(&our_cache, &real_cache)?;
 
     // Parse using ld-so-cache crate for cross-validation
-    let our_data = std::fs::read(&options.our_cache)
-        .map_err(|e| Error::CacheRead(format!("Failed to read our cache: {}", e)))?;
-    let real_data = std::fs::read(&options.real_cache)
-        .map_err(|e| Error::CacheRead(format!("Failed to read real cache: {}", e)))?;
+    let our_data = std::fs::read(&options.our_cache)?;
+    let real_data = std::fs::read(&options.real_cache)?;
 
     println!("\n--- ld-so-cache Crate Cross-Validation ---");
 

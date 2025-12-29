@@ -162,7 +162,7 @@ impl Cache {
 
         // Add newly created symlinks
         for action in &new_symlink_actions {
-            if let Ok(lib) = parse_elf_file(action.link.as_std_path()) {
+            if let Some(lib) = parse_elf_file(action.link.as_std_path()) {
                 cache_entries.push(lib);
             }
         }
@@ -185,9 +185,7 @@ impl Cache {
 
     /// Read and parse cache from file path
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, Error> {
-        let data = fs::read(path.as_ref())
-            .map_err(|e| Error::CacheRead(format!("Failed to read cache: {}", e)))?;
-
+        let data = fs::read(path.as_ref())?;
         Self::from_bytes(&data)
     }
 
@@ -261,14 +259,13 @@ impl Cache {
     fn extract_string(&self, offset: u32) -> Result<String, Error> {
         let start = offset as usize;
         if start >= self.data.len() {
-            return Err(Error::CacheRead(format!("Invalid offset: {}", offset)));
+            return Err(Error::InvalidCacheOffset(offset));
         }
 
         let slice = &self.data[start..];
         let null_pos = slice.iter().position(|&b| b == 0).unwrap_or(slice.len());
 
-        String::from_utf8(slice[..null_pos].to_vec())
-            .map_err(|_| Error::CacheRead("Invalid UTF-8 in string".to_string()))
+        String::from_utf8(slice[..null_pos].to_vec()).map_err(|_| Error::InvalidCacheUtf8)
     }
 }
 

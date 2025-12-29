@@ -104,9 +104,7 @@ impl Default for RawConfig {
 }
 
 fn parse_config_file(path: &Utf8Path) -> Result<RawConfig, Error> {
-    let content = fs::read_to_string(path)
-        .map_err(|e| Error::Config(format!("Failed to read config file: {}", e)))?;
-
+    let content = fs::read_to_string(path)?;
     parse_config_content(&content)
 }
 
@@ -139,20 +137,12 @@ fn expand_includes(config: &RawConfig) -> Result<Vec<Utf8PathBuf>, Error> {
 
     for pattern in &config.include_patterns {
         // Use glob to expand the pattern
-        for entry in
-            glob::glob(pattern).map_err(|e| Error::Config(format!("Glob pattern error: {}", e)))?
-        {
+        for entry in glob::glob(pattern)? {
             match entry {
                 Ok(path) => {
                     if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("conf") {
                         // This is a config file, parse it
-                        let content = std::fs::read_to_string(&path).map_err(|e| {
-                            Error::Config(format!(
-                                "Failed to read included config file {}: {}",
-                                path.display(),
-                                e
-                            ))
-                        })?;
+                        let content = std::fs::read_to_string(&path)?;
 
                         // Parse the content as a config file
                         let included_config = parse_config_content(&content)?;

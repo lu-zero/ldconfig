@@ -11,8 +11,7 @@ pub struct SymlinkAction {
 }
 
 fn create_symlink(target: &Path, link: &Path) -> Result<(), Error> {
-    std::os::unix::fs::symlink(target, link)
-        .map_err(|e| Error::Symlink(format!("Failed to create symlink: {}", e)))?;
+    std::os::unix::fs::symlink(target, link)?;
     Ok(())
 }
 
@@ -60,7 +59,7 @@ pub fn update(
                 actions.push(SymlinkAction {
                     target: Utf8PathBuf::from(filename),
                     link: Utf8PathBuf::try_from(symlink_path.clone())
-                        .map_err(|_| Error::Config("Invalid UTF-8 in symlink path".to_string()))?,
+                        .map_err(|_| Error::InvalidPathUtf8)?,
                 });
 
                 if !dry_run {

@@ -9,18 +9,18 @@ pub enum Error {
     #[error("ELF parsing error: {0}")]
     Goblin(#[from] goblin::error::Error),
 
-    #[error("ELF error: {0}")]
-    Elf(#[from] crate::elf::Error),
+    #[error("Glob pattern error: {0}")]
+    Glob(#[from] glob::PatternError),
 
-    #[error("Cache write error: {0}")]
-    CacheWrite(String),
+    #[error("UTF-8 conversion error: {0}")]
+    Utf8(#[from] std::string::FromUtf8Error),
 
-    #[error("Cache read error: {0}")]
-    CacheRead(String),
+    #[error("Invalid cache offset: {0}")]
+    InvalidCacheOffset(u32),
 
-    #[error("Symlink error: {0}")]
-    Symlink(String),
+    #[error("Invalid UTF-8 in cache string")]
+    InvalidCacheUtf8,
 
-    #[error("Config parsing error: {0}")]
-    Config(String),
+    #[error("Invalid UTF-8 in path")]
+    InvalidPathUtf8,
 }

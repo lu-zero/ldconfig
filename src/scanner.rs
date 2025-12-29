@@ -69,7 +69,7 @@ pub fn scan_all_libraries(
             let path = entry.path();
 
             if path.is_file() && should_scan_library(&path) {
-                if let Ok(lib) = parse_elf_file(&path) {
+                if let Some(lib) = parse_elf_file(&path) {
                     let is_symlink = std::fs::symlink_metadata(&path)
                         .map(|m| m.file_type().is_symlink())
                         .unwrap_or(false);
@@ -91,7 +91,7 @@ pub fn scan_all_libraries(
                 let path = entry.path();
 
                 if path.is_file() && should_scan_library(&path) {
-                    if let Ok(mut lib) = parse_elf_file(&path) {
+                    if let Some(mut lib) = parse_elf_file(&path) {
                         let is_symlink = std::fs::symlink_metadata(&path)
                             .map(|m| m.file_type().is_symlink())
                             .unwrap_or(false);

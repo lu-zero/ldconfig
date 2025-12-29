@@ -4,30 +4,31 @@ use goblin::elf::Elf;
 use memmap2::Mmap;
 use std::fs::File;
 use std::path::Path;
-use tracing::warn;
+use tracing::{debug, warn};
 
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("Not a shared object (ET_DYN)")]
+/// Local error type for ELF parsing failures
+/// These errors are never surfaced to users - files are just skipped during scanning
+#[derive(Debug)]
+pub(crate) enum ParseError {
+    Io,
+    Goblin,
     NotSharedObject,
-
-    #[error("Missing PT_DYNAMIC segment")]
     MissingDynamicSegment,
-
-    #[error("Missing DT_SONAME entry")]
     MissingSoname,
-
-    #[error("Empty SONAME")]
     EmptySoname,
-
-    #[error("Unsupported ELF class")]
-    UnsupportedClass,
-
-    #[error("Unsupported endianness")]
-    UnsupportedEndianness,
-
-    #[error("Unsupported architecture")]
     UnsupportedArchitecture,
+}
+
+impl From<std::io::Error> for ParseError {
+    fn from(_: std::io::Error) -> Self {
+        ParseError::Io
+    }
+}
+
+impl From<goblin::error::Error> for ParseError {
+    fn from(_: goblin::error::Error) -> Self {
+        ParseError::Goblin
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,21 +52,20 @@ pub struct ElfLibrary {
     pub hwcap: Option<u64>,
 }
 
-pub fn parse_elf_file(path: &Path) -> Result<ElfLibrary, crate::Error> {
-    let file = File::open(path)?;
-    let mmap = unsafe { Mmap::map(&file)? };
-    let elf = Elf::parse(&mmap)?;
+pub fn parse_elf_file(path: &Path) -> Option<ElfLibrary> {
+    let file = File::open(path).ok()?;
+    let mmap = unsafe { Mmap::map(&file).ok()? };
+    let elf = Elf::parse(&mmap).ok()?;
 
-    validate_elf(&elf)?;
-    let soname = extract_soname(&elf, path)?;
-    let arch = detect_architecture(&elf)?;
+    validate_elf(&elf, path).ok()?;
+    let soname = extract_soname(&elf, path).ok()?;
+    let arch = detect_architecture(&elf).ok()?;
     let is_hardfloat = detect_hardfloat(&elf);
 
     // Convert Path to Utf8PathBuf
-    let utf8_path = Utf8PathBuf::try_from(path.to_path_buf())
-        .map_err(|_| crate::Error::Config("Path contains invalid UTF-8".to_string()))?;
+    let utf8_path = Utf8PathBuf::try_from(path.to_path_buf()).ok()?;
 
-    Ok(ElfLibrary {
+    Some(ElfLibrary {
         soname,
         path: utf8_path,
         is_64bit: elf.is_64,
@@ -76,10 +76,11 @@ pub fn parse_elf_file(path: &Path) -> Result<ElfLibrary, crate::Error> {
     })
 }
 
-fn validate_elf(elf: &Elf) -> Result<(), Error> {
+fn validate_elf(elf: &Elf, path: &Path) -> Result<(), ParseError> {
     // Must be a shared object (ET_DYN)
     if elf.header.e_type != ET_DYN {
-        return Err(Error::NotSharedObject);
+        debug!("Skipping {}: not a shared object (ET_DYN)", path.display());
+        return Err(ParseError::NotSharedObject);
     }
 
     // Must have PT_DYNAMIC segment
@@ -88,31 +89,39 @@ fn validate_elf(elf: &Elf) -> Result<(), Error> {
         .iter()
         .all(|ph| ph.p_type != goblin::elf::program_header::PT_DYNAMIC)
     {
-        return Err(Error::MissingDynamicSegment);
+        debug!("Skipping {}: missing PT_DYNAMIC segment", path.display());
+        return Err(ParseError::MissingDynamicSegment);
     }
 
     Ok(())
 }
 
-fn extract_soname(elf: &Elf, _path: &Path) -> Result<String, crate::Error> {
+fn extract_soname(elf: &Elf, path: &Path) -> Result<String, ParseError> {
     let soname_index = match &elf.dynamic {
         Some(dynamic) => dynamic.info.soname,
-        None => return Err(Error::MissingSoname.into()),
+        None => {
+            debug!("Skipping {}: missing SONAME", path.display());
+            return Err(ParseError::MissingSoname);
+        }
     };
 
     let soname_str = match elf.dynstrtab.get_at(soname_index) {
         Some(s) => s,
-        None => return Err(Error::MissingSoname.into()),
+        None => {
+            debug!("Skipping {}: invalid SONAME index", path.display());
+            return Err(ParseError::MissingSoname);
+        }
     };
 
     if soname_str.is_empty() {
-        return Err(Error::EmptySoname.into());
+        debug!("Skipping {}: empty SONAME", path.display());
+        return Err(ParseError::EmptySoname);
     }
 
     Ok(soname_str.to_string())
 }
 
-fn detect_architecture(elf: &Elf) -> Result<ElfArch, Error> {
+fn detect_architecture(elf: &Elf) -> Result<ElfArch, ParseError> {
     use goblin::elf::header::*;
     match elf.header.e_machine {
         EM_X86_64 => Ok(ElfArch::X86_64),
@@ -128,7 +137,7 @@ fn detect_architecture(elf: &Elf) -> Result<ElfArch, Error> {
                 "Unsupported architecture: {} (0x{:x})",
                 machine_str, elf.header.e_machine
             );
-            Err(Error::UnsupportedArchitecture)
+            Err(ParseError::UnsupportedArchitecture)
         }
     }
 }
