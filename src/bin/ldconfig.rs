@@ -1,6 +1,8 @@
 use bpaf::Bpaf;
 use camino::Utf8PathBuf;
 use ldconfig::{Cache, Error, LibraryConfig};
+use tracing::{debug, info, warn, Level};
+use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 #[derive(Debug, Clone, Bpaf)]
 #[bpaf(options)]
@@ -30,17 +32,49 @@ struct Options {
     config_file: Option<Utf8PathBuf>,
 }
 
+/// Initialize the tracing subscriber with appropriate configuration
+///
+/// # Arguments
+///
+/// * `verbose` - If true, sets log level to DEBUG, otherwise INFO
+/// * `with_target` - If true, includes target information in log output
+pub fn init_logging(verbose: bool) {
+    let filter_level = if verbose { Level::DEBUG } else { Level::INFO };
+
+    // Set up environment filter - allow overriding via RUST_LOG env var
+    let env_filter = EnvFilter::builder()
+        .with_default_directive(filter_level.into())
+        .from_env_lossy();
+
+    // Configure the subscriber format
+    let fmt_layer = fmt::layer()
+        .with_level(verbose)
+        .with_target(verbose)
+        .with_line_number(verbose)
+        .without_time()
+        .compact();
+
+    // Initialize the subscriber
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(fmt_layer)
+        .init();
+
+    debug!("Logging initialized with level: {}", filter_level);
+}
+
 fn main() -> Result<(), Error> {
     let options = options().run();
+
+    // Initialize logging system
+    init_logging(options.verbose);
 
     // Handle print-cache flag
     if options.print_cache {
         return print_cache(&options);
     }
 
-    if options.verbose {
-        println!("Using prefix: {}", options.prefix);
-    }
+    debug!("Using prefix: {}", options.prefix);
 
     // Determine config file path
     let config_path = options
@@ -48,20 +82,14 @@ fn main() -> Result<(), Error> {
         .clone()
         .unwrap_or_else(|| options.prefix.join("etc/ld.so.conf"));
 
-    if options.verbose {
-        println!("Config file: {}", config_path);
-    }
+    debug!("Config file: {}", config_path);
 
     // Load configuration with prefix handling
     let config = if config_path.exists() {
-        if options.verbose {
-            println!("Loading configuration from: {}", config_path);
-        }
+        info!("Loading configuration from: {}", config_path);
         LibraryConfig::from_file(&config_path, Some(options.prefix.as_path()))?
     } else {
-        if options.verbose {
-            println!("No config file found, using default configuration");
-        }
+        warn!("No config file found, using default configuration");
         // Apply prefix to default directories
         let default = LibraryConfig::default();
         let prefixed_dirs: Vec<_> = default
@@ -72,19 +100,14 @@ fn main() -> Result<(), Error> {
         LibraryConfig::from_directories(prefixed_dirs)
     };
 
-    if options.verbose {
-        println!("Directories to scan: {:?}", config.directories());
-    }
+    debug!("Directories to scan: {:?}", config.directories());
 
     let cache = Cache::builder()
-        .verbose(options.verbose)
         .prefix(options.prefix.as_path())
         .dry_run(options.dry_run)
         .build(&config)?;
 
-    if options.verbose {
-        println!("Built cache with {} bytes", cache.size());
-    }
+    info!("Built cache with {} bytes", cache.size());
 
     if !options.dry_run {
         // Determine cache file path
@@ -94,9 +117,7 @@ fn main() -> Result<(), Error> {
 
         cache.write_to_file(&cache_path)?;
 
-        if options.verbose {
-            println!("Wrote {} bytes to {}", cache.size(), cache_path);
-        }
+        info!("Wrote {} bytes to {}", cache.size(), cache_path);
     }
 
     Ok(())

@@ -5,6 +5,7 @@
 use crate::Error;
 use camino::{Utf8Path, Utf8PathBuf};
 use std::fs;
+use tracing::warn;
 
 /// Library configuration containing directories to scan
 #[derive(Debug, Clone)]
@@ -153,7 +154,7 @@ fn expand_includes(config: &RawConfig) -> Result<Vec<Utf8PathBuf>, Error> {
                     }
                 }
                 Err(e) => {
-                    eprintln!("Warning: Failed to process glob pattern {}: {}", pattern, e);
+                    warn!("Failed to process glob pattern {}: {}", pattern, e);
                 }
             }
         }

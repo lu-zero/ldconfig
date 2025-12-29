@@ -36,6 +36,7 @@ use std::fmt;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
+use tracing::{debug, info};
 
 /// Information about the cache file
 #[derive(Debug, Clone)]
@@ -108,38 +109,31 @@ impl Cache {
         #[builder(default)]
         /// Dry run mode (don't make changes)
         dry_run: bool,
-        /// Verbose output
-        #[builder(default)]
-        verbose: bool,
         /// Root prefix
         prefix: &Utf8Path,
     ) -> Result<Self, Error> {
         let scan_dirs = deduplicate_scan_directories(config.directories());
 
-        if verbose {
-            println!("Scanning directories: {:?}", scan_dirs);
-        }
+        debug!("Scanning directories: {:?}", scan_dirs);
 
         // STEP 1: Single scan - collect all real files and symlinks
         let (real_files, existing_symlinks) = scan_all_libraries(&scan_dirs)?;
 
-        if verbose {
-            println!(
-                "Found {} real files, {} existing symlinks",
-                real_files.len(),
-                existing_symlinks.len()
-            );
-        }
+        debug!(
+            "Found {} real files, {} existing symlinks",
+            real_files.len(),
+            existing_symlinks.len()
+        );
 
         // STEP 2: Update symlinks from real files
         let mut new_symlink_actions = Vec::new();
         if update_symlinks && !dry_run {
             for dir in &scan_dirs {
                 if let Ok(actions) = symlinks::update(dir.as_std_path(), &real_files, dry_run) {
-                    if verbose && !actions.is_empty() {
-                        println!("Symlink actions in {}:", dir);
+                    if !actions.is_empty() {
+                        debug!("Symlink actions in {}:", dir);
                         for action in &actions {
-                            println!("  {} -> {}", action.link, action.target);
+                            debug!("  {} -> {}", action.link, action.target);
                         }
                     }
                     new_symlink_actions.extend(actions);
@@ -176,9 +170,7 @@ impl Cache {
         // Deduplicate by (directory, filename)
         let unique_libraries = deduplicate_libraries(&cache_entries);
 
-        if verbose {
-            println!("Cache entries: {} unique libraries", unique_libraries.len());
-        }
+        info!("Cache entries: {} unique libraries", unique_libraries.len());
 
         let data = cache_format::build_cache(&unique_libraries, prefix);
         Ok(Cache::from_bytes_raw(data))

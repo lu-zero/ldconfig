@@ -8,6 +8,7 @@
 
 use crate::internal::elf::{ElfArch, ElfLibrary};
 use crate::Error;
+use tracing::warn;
 use camino::{Utf8Path, Utf8PathBuf};
 use std::collections::HashMap;
 
@@ -178,8 +179,8 @@ pub(crate) fn build_cache(libraries: &[ElfLibrary], prefix: &Utf8Path) -> Vec<u8
         // Look up string offsets for filename and path (these are relative to string table start)
         let filename = lib.path.file_name().unwrap_or(lib.path.as_str());
         let key_relative_offset = *string_offsets.get(filename).unwrap_or_else(|| {
-            eprintln!(
-                "WARNING: Filename '{}' not found in string offsets map!",
+            warn!(
+                "Filename '{}' not found in string offsets map!",
                 filename
             );
             &0u32
@@ -216,8 +217,8 @@ pub(crate) fn build_cache(libraries: &[ElfLibrary], prefix: &Utf8Path) -> Vec<u8
         };
 
         let value_relative_offset = *string_offsets.get(&path_to_add).unwrap_or_else(|| {
-            eprintln!(
-                "WARNING: PATH '{}' not found in string offsets map!",
+            warn!(
+                "PATH '{}' not found in string offsets map!",
                 path_to_add
             );
             &0u32
