@@ -4,7 +4,6 @@
 /// It cross-validates with the ld-so-cache crate to ensure compatibility.
 ///
 /// Usage: cargo run --example compare_caches <our_cache> <real_cache>
-
 use bpaf::Bpaf;
 use ld_so_cache::parsers::parse_ld_cache;
 use ldconfig::{Cache, Error};
@@ -65,19 +64,30 @@ fn compare_caches(our_cache: &Cache, real_cache: &Cache) -> Result<(), Error> {
 
     let entries_to_compare = std::cmp::min(5, std::cmp::min(our_entries.len(), real_entries.len()));
     println!("\nComparing first {} entries:", entries_to_compare);
-    
+
     for i in 0..entries_to_compare {
         let our_entry = &our_entries[i];
         let real_entry = &real_entries[i];
 
         if our_entry.soname == real_entry.soname {
-            println!("✅ Entry {}: {} (flags match: {})", i, our_entry.soname, our_entry.flags == real_entry.flags);
+            println!(
+                "✅ Entry {}: {} (flags match: {})",
+                i,
+                our_entry.soname,
+                our_entry.flags == real_entry.flags
+            );
         } else {
-            println!("❌ Entry {} name differs: {} vs {}", i, our_entry.soname, real_entry.soname);
+            println!(
+                "❌ Entry {} name differs: {} vs {}",
+                i, our_entry.soname, real_entry.soname
+            );
         }
 
         if our_entry.flags != real_entry.flags {
-            println!("   ⚠️  Flags: 0x{:04x} vs 0x{:04x}", our_entry.flags, real_entry.flags);
+            println!(
+                "   ⚠️  Flags: 0x{:04x} vs 0x{:04x}",
+                our_entry.flags, real_entry.flags
+            );
         }
     }
 
@@ -110,7 +120,10 @@ fn main() -> Result<(), Error> {
                 println!("  Libraries: {}", entries.len());
 
                 for (i, entry) in entries.iter().take(3).enumerate() {
-                    println!("    {}. {} -> {}", i, entry.library_name, entry.library_path);
+                    println!(
+                        "    {}. {} -> {}",
+                        i, entry.library_name, entry.library_path
+                    );
                 }
             }
         }
@@ -126,7 +139,10 @@ fn main() -> Result<(), Error> {
                 println!("  Libraries: {}", entries.len());
 
                 for (i, entry) in entries.iter().take(3).enumerate() {
-                    println!("    {}. {} -> {}", i, entry.library_name, entry.library_path);
+                    println!(
+                        "    {}. {} -> {}",
+                        i, entry.library_name, entry.library_path
+                    );
                 }
             }
         }
@@ -137,10 +153,11 @@ fn main() -> Result<(), Error> {
 
     // Cross-validate entry counts
     if let (Ok(our_ld_cache), Ok(real_ld_cache)) =
-        (parse_ld_cache(&our_data), parse_ld_cache(&real_data)) {
+        (parse_ld_cache(&our_data), parse_ld_cache(&real_data))
+    {
         if let (Ok(our_entries), Ok(real_entries)) =
-            (our_ld_cache.get_entries(), real_ld_cache.get_entries()) {
-
+            (our_ld_cache.get_entries(), real_ld_cache.get_entries())
+        {
             println!("\n--- Entry Count Validation ---");
             if our_entries.len() == real_entries.len() {
                 println!("✅ ld-so-cache library counts match: {}", our_entries.len());

@@ -18,10 +18,7 @@ pub struct SearchPaths(Vec<Utf8PathBuf>);
 
 impl SearchPaths {
     /// Create config from file path with optional prefix
-    pub fn from_file(
-        path: impl AsRef<Utf8Path>,
-        prefix: Option<&Utf8Path>,
-    ) -> Result<Self, Error> {
+    pub fn from_file(path: impl AsRef<Utf8Path>, prefix: Option<&Utf8Path>) -> Result<Self, Error> {
         let path = path.as_ref();
 
         // Parse the main config file

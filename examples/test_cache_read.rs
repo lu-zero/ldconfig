@@ -19,10 +19,7 @@ fn main() {
 
             println!("\nFirst 5 entries:");
             for entry in cache.entries().take(5) {
-                println!(
-                    "  {} ({}) => {}",
-                    entry.soname, entry.arch, entry.path
-                );
+                println!("  {} ({}) => {}", entry.soname, entry.arch, entry.path);
                 if entry.hwcap != 0 {
                     println!("    hwcap: 0x{:016x}", entry.hwcap);
                 }
