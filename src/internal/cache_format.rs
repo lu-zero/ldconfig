@@ -75,7 +75,8 @@ pub struct CacheInfo {
 }
 
 /// Build cache binary data from library list
-pub(crate) fn build_cache(libraries: &[ElfLibrary], prefix: Option<&Utf8Path>) -> Vec<u8> {
+pub(crate) fn build_cache(libraries: &[ElfLibrary], prefix: &Utf8Path) -> Vec<u8> {
+    let has_prefix = prefix != "/";
     let mut cache = Vec::new();
 
     // Header: magic (20 bytes)
@@ -146,7 +147,7 @@ pub(crate) fn build_cache(libraries: &[ElfLibrary], prefix: Option<&Utf8Path>) -
 
         let canonical_path = canonical_dir.join(filename_part);
 
-        let path_to_add = if let Some(prefix) = prefix {
+        let path_to_add = if has_prefix {
             // Get canonical prefix for comparison
             let canonical_prefix = prefix
                 .as_std_path()
@@ -197,7 +198,7 @@ pub(crate) fn build_cache(libraries: &[ElfLibrary], prefix: Option<&Utf8Path>) -
 
         let canonical_path = canonical_dir.join(filename_part);
 
-        let path_to_add = if let Some(prefix) = prefix {
+        let path_to_add = if has_prefix {
             let canonical_prefix = prefix
                 .as_std_path()
                 .canonicalize()

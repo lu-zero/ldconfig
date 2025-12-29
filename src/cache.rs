@@ -24,7 +24,14 @@
 //! ```
 
 use crate::internal::cache_format::{self, CacheInfo as InternalCacheInfo};
-use crate::Error;
+use crate::internal::elf::parse_elf_file;
+use crate::internal::scanner::{
+    deduplicate_libraries, deduplicate_scan_directories, scan_all_libraries, should_include_symlink,
+};
+use crate::internal::symlinks;
+use crate::{Error, LibraryConfig};
+use bon::bon;
+use camino::Utf8Path;
 use std::fmt;
 use std::fs;
 use std::io::Write;
@@ -88,6 +95,96 @@ impl<'a> Iterator for CacheEntries<'a> {
     }
 }
 
+#[bon]
+impl Cache {
+    #[builder]
+    pub fn new(
+        /// Directories to scan
+        #[builder(finish_fn)]
+        config: &LibraryConfig,
+        /// Update symlinks in directories
+        #[builder(default = true)]
+        update_symlinks: bool,
+        #[builder(default)]
+        /// Dry run mode (don't make changes)
+        dry_run: bool,
+        /// Verbose output
+        #[builder(default)]
+        verbose: bool,
+        /// Root prefix
+        prefix: &Utf8Path,
+    ) -> Result<Self, Error> {
+        let scan_dirs = deduplicate_scan_directories(config.directories());
+
+        if verbose {
+            println!("Scanning directories: {:?}", scan_dirs);
+        }
+
+        // STEP 1: Single scan - collect all real files and symlinks
+        let (real_files, existing_symlinks) = scan_all_libraries(&scan_dirs)?;
+
+        if verbose {
+            println!(
+                "Found {} real files, {} existing symlinks",
+                real_files.len(),
+                existing_symlinks.len()
+            );
+        }
+
+        // STEP 2: Update symlinks from real files
+        let mut new_symlink_actions = Vec::new();
+        if update_symlinks && !dry_run {
+            for dir in &scan_dirs {
+                if let Ok(actions) = symlinks::update(dir.as_std_path(), &real_files, dry_run) {
+                    if verbose && !actions.is_empty() {
+                        println!("Symlink actions in {}:", dir);
+                        for action in &actions {
+                            println!("  {} -> {}", action.link, action.target);
+                        }
+                    }
+                    new_symlink_actions.extend(actions);
+                }
+            }
+        }
+
+        // STEP 3: Build cache entries from real files + symlinks
+        let mut cache_entries = Vec::new();
+
+        // Add real files where filename == SONAME
+        for lib in &real_files {
+            let filename = lib.path.file_name().unwrap_or("");
+            if filename == lib.soname {
+                cache_entries.push(lib.clone());
+            }
+        }
+
+        // Add existing symlinks (with filtering)
+        for lib in &existing_symlinks {
+            let filename = lib.path.file_name().unwrap_or("");
+            if should_include_symlink(filename, &lib.soname, &lib.path) {
+                cache_entries.push(lib.clone());
+            }
+        }
+
+        // Add newly created symlinks
+        for action in &new_symlink_actions {
+            if let Ok(lib) = parse_elf_file(action.link.as_std_path()) {
+                cache_entries.push(lib);
+            }
+        }
+
+        // Deduplicate by (directory, filename)
+        let unique_libraries = deduplicate_libraries(&cache_entries);
+
+        if verbose {
+            println!("Cache entries: {} unique libraries", unique_libraries.len());
+        }
+
+        let data = cache_format::build_cache(&unique_libraries, prefix);
+        Ok(Cache::from_bytes_raw(data))
+    }
+}
+
 impl Cache {
     /// Create cache from raw bytes (for writing)
     pub(crate) fn from_bytes_raw(data: Vec<u8>) -> Self {
@@ -136,9 +233,9 @@ impl Cache {
 
     /// Find entries matching a library name (returns iterator)
     pub fn find<'a>(&'a self, name: &'a str) -> impl Iterator<Item = CacheEntry> + 'a {
-        self.entries().filter(move |entry| entry.soname.contains(name))
+        self.entries()
+            .filter(move |entry| entry.soname.contains(name))
     }
-
 
     /// Write cache to file
     pub fn write_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), Error> {
@@ -222,26 +319,18 @@ impl fmt::Display for Cache {
 fn decode_arch_flags(flags: u32) -> &'static str {
     let arch_bits = (flags >> 8) & 0xff;
     match arch_bits {
-        0x00 => "libc6",                  // i386/generic ELF
-        0x01 => "libc6,SPARC 64-bit",     // SPARC 64-bit
-        0x03 => "libc6,x86-64",           // x86_64
-        0x04 => "libc6,64bit",            // PowerPC/S390 64-bit
-        0x05 => "libc6,64bit",            // PowerPC 64-bit (official)
-        0x06 => "libc6,IA-64",            // IA-64
-        0x07 => "libc6,MIPS 64-bit",      // MIPS 64-bit
-        0x08 => "libc6,x32",              // x32
-        0x09 => "libc6,ARM,hard-float",   // ARM hard-float
-        0x0a => "libc6,AArch64",          // AArch64
-        0x0b => "libc6,ARM,soft-float",   // ARM soft-float
-        0x10 => "libc6,RISC-V 64-bit",    // RISC-V lp64d
+        0x00 => "libc6",                // i386/generic ELF
+        0x01 => "libc6,SPARC 64-bit",   // SPARC 64-bit
+        0x03 => "libc6,x86-64",         // x86_64
+        0x04 => "libc6,64bit",          // PowerPC/S390 64-bit
+        0x05 => "libc6,64bit",          // PowerPC 64-bit (official)
+        0x06 => "libc6,IA-64",          // IA-64
+        0x07 => "libc6,MIPS 64-bit",    // MIPS 64-bit
+        0x08 => "libc6,x32",            // x32
+        0x09 => "libc6,ARM,hard-float", // ARM hard-float
+        0x0a => "libc6,AArch64",        // AArch64
+        0x0b => "libc6,ARM,soft-float", // ARM soft-float
+        0x10 => "libc6,RISC-V 64-bit",  // RISC-V lp64d
         _ => "unknown",
     }
-}
-
-// Backwards compatibility exports
-use crate::internal::elf::ElfLibrary;
-use camino::Utf8Path;
-
-pub fn build_cache(libraries: &[ElfLibrary], prefix: Option<&Utf8Path>) -> Vec<u8> {
-    cache_format::build_cache(libraries, prefix)
 }

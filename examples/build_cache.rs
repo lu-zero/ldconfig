@@ -7,7 +7,7 @@
 ///
 /// Usage: cargo run --example build_cache -- <prefix>
 use camino::Utf8PathBuf;
-use ldconfig::{CacheBuilder, Error, LibraryConfig, ScanOptions};
+use ldconfig::{Cache, Error, LibraryConfig};
 use std::env;
 
 fn main() -> Result<(), Error> {
@@ -39,23 +39,12 @@ fn main() -> Result<(), Error> {
 
     println!("Directories to scan: {:?}", config.directories());
 
-    // Step 2: Build cache using high-level API
-    let scan_options = ScanOptions {
-        update_symlinks: false, // Dry run for example
-        dry_run: true,
-        verbose: true,
-    };
+    let cache = Cache::builder()
+        .update_symlinks(false)
+        .dry_run(true)
+        .prefix(prefix.as_path())
+        .build(&config)?;
 
-    let mut builder = CacheBuilder::new();
-    if prefix.as_str() != "/" {
-        builder = builder.with_prefix(prefix.clone());
-    }
-
-    builder.scan_directories(&config, &scan_options)?;
-
-    println!("Cache will contain {} unique libraries", builder.library_count());
-
-    let cache = builder.build()?;
     println!("Cache size: {} bytes", cache.size());
 
     Ok(())

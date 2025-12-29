@@ -1,6 +1,6 @@
 use bpaf::Bpaf;
 use camino::Utf8PathBuf;
-use ldconfig::{Cache, CacheBuilder, Error, LibraryConfig, ScanOptions};
+use ldconfig::{Cache, Error, LibraryConfig};
 
 #[derive(Debug, Clone, Bpaf)]
 #[bpaf(options)]
@@ -76,27 +76,11 @@ fn main() -> Result<(), Error> {
         println!("Directories to scan: {:?}", config.directories());
     }
 
-    // Build cache using high-level API
-    let scan_options = ScanOptions {
-        update_symlinks: !options.dry_run,
-        dry_run: options.dry_run,
-        verbose: options.verbose,
-    };
-
-    let mut builder = CacheBuilder::new();
-    if options.prefix.as_str() != "/" {
-        builder = builder.with_prefix(options.prefix.clone());
-    }
-
-    builder.scan_directories(&config, &scan_options)?;
-
-    let library_count = builder.library_count();
-
-    if options.verbose {
-        println!("Found {} libraries", library_count);
-    }
-
-    let cache = builder.build()?;
+    let cache = Cache::builder()
+        .verbose(options.verbose)
+        .prefix(options.prefix.as_path())
+        .dry_run(options.dry_run)
+        .build(&config)?;
 
     if options.verbose {
         println!("Built cache with {} bytes", cache.size());
@@ -113,8 +97,6 @@ fn main() -> Result<(), Error> {
         if options.verbose {
             println!("Wrote {} bytes to {}", cache.size(), cache_path);
         }
-    } else if options.verbose {
-        println!("Dry run: would write {} libraries to cache", library_count);
     }
 
     Ok(())

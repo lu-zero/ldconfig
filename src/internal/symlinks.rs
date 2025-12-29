@@ -18,13 +18,13 @@ pub enum SymlinkActionType {
     Skip,
 }
 
-pub fn create_symlink(target: &Path, link: &Path) -> Result<(), Error> {
+fn create_symlink(target: &Path, link: &Path) -> Result<(), Error> {
     std::os::unix::fs::symlink(target, link)
         .map_err(|e| Error::Symlink(format!("Failed to create symlink: {}", e)))?;
     Ok(())
 }
 
-pub fn update_symlinks(
+pub fn update(
     _dir: &Path,
     libraries: &[ElfLibrary],
     dry_run: bool,
