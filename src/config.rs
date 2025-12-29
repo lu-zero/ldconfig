@@ -24,8 +24,9 @@ impl SearchPaths {
         // Parse the main config file
         let mut config = parse_config_file(path)?;
 
-        // Expand includes
-        let included_dirs = expand_includes(&config)?;
+        // Expand includes (relative to config file's directory)
+        let base_dir = path.parent().unwrap_or_else(|| Utf8Path::new(""));
+        let included_dirs = expand_includes(&config, base_dir)?;
         config.directories.extend(included_dirs);
 
         // Apply prefix if provided
@@ -129,12 +130,15 @@ fn parse_config_content(content: &str) -> Result<RawConfig, Error> {
     Ok(config)
 }
 
-fn expand_includes(config: &RawConfig) -> Result<Vec<Utf8PathBuf>, Error> {
+fn expand_includes(config: &RawConfig, base_dir: &Utf8Path) -> Result<Vec<Utf8PathBuf>, Error> {
     let mut included_dirs = Vec::new();
 
     for pattern in &config.include_patterns {
+        // Resolve pattern relative to base_dir
+        let full_pattern = base_dir.join(pattern);
+
         // Use glob to expand the pattern
-        for entry in glob::glob(pattern)? {
+        for entry in glob::glob(full_pattern.as_str())? {
             match entry {
                 Ok(path) => {
                     if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("conf") {
