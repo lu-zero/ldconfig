@@ -8,14 +8,6 @@ use std::path::Path;
 pub struct SymlinkAction {
     pub target: Utf8PathBuf,
     pub link: Utf8PathBuf,
-    pub action: SymlinkActionType,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum SymlinkActionType {
-    Create,
-    Update,
-    Skip,
 }
 
 fn create_symlink(target: &Path, link: &Path) -> Result<(), Error> {
@@ -69,7 +61,6 @@ pub fn update(
                     target: Utf8PathBuf::from(filename),
                     link: Utf8PathBuf::try_from(symlink_path.clone())
                         .map_err(|_| Error::Config("Invalid UTF-8 in symlink path".to_string()))?,
-                    action: SymlinkActionType::Create,
                 });
 
                 if !dry_run {
