@@ -10,10 +10,8 @@ keywords = ["glibc", "ld-so-cache"]
 rust-version = "1.90"
 
 [dependencies]
-anyhow = "1.0.100"
 goblin = "0.10.4"
 memmap2 = "0.9.9"
-walkdir = "2.5.0"
 bpaf = { version = "0.9", features = ["derive", "bright-color"] }
 thiserror = "2.0.17"
 glob = "0.3.1"
