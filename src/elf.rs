@@ -72,7 +72,7 @@ pub fn parse_elf_file(path: &Path) -> Option<ElfLibrary> {
         arch,
         is_hardfloat,
         osversion: extract_osversion(&elf),
-        hwcap: detect_hwcap_from_path(path),
+        hwcap: None,
     })
 }
 
@@ -161,16 +161,4 @@ fn extract_osversion(_elf: &Elf) -> u32 {
     // Full implementation requires parsing note section binary data
     // from program header PT_NOTE segments
     0
-}
-
-fn detect_hwcap_from_path(path: &Path) -> Option<u64> {
-    path.components().find_map(|c| {
-        let component = c.as_os_str().to_string_lossy();
-        match component.as_ref() {
-            "haswell" => Some(1 << 0),
-            "avx512" => Some(1 << 1),
-            "sve2" => Some(1 << 2),
-            _ => None,
-        }
-    })
 }

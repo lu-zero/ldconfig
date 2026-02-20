@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use crate::elf::ElfArch;
 use crate::error::Error;
 use std::fs;
@@ -81,37 +80,4 @@ pub fn detect_hwcap_dirs(base_dir: &Path) -> Result<Vec<(PathBuf, HwCap)>, Error
     }
 
     Ok(hwcap_dirs)
-}
-
-// TODO wire in
-pub fn scan_hwcap_libraries(
-    hwcap_dirs: &[(PathBuf, HwCap)],
-) -> Result<Vec<(PathBuf, HwCap)>, Error> {
-    let mut libraries = Vec::new();
-
-    for (dir, hwcap) in hwcap_dirs {
-        for entry in fs::read_dir(dir)? {
-            let entry = entry?;
-            let path = entry.path();
-
-            if path.is_file() && is_shared_library(&path) {
-                libraries.push((path, hwcap.clone()));
-            }
-        }
-    }
-
-    Ok(libraries)
-}
-
-fn is_shared_library(path: &Path) -> bool {
-    if let Some(ext) = path.extension() {
-        if ext == "so" {
-            return true;
-        }
-    }
-
-    path.file_name()
-        .and_then(|n| n.to_str())
-        .map(|n| n.contains(".so."))
-        .unwrap_or(false)
 }
