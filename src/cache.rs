@@ -35,6 +35,7 @@ use camino::Utf8Path;
 use std::fmt;
 use std::fs;
 use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use tracing::{debug, info};
 
@@ -225,7 +226,7 @@ impl Cache {
             .filter(move |entry| entry.soname.contains(name))
     }
 
-    /// Write cache to file
+    /// Write cache to file atomically (write to temp, fsync, rename)
     pub fn write_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), Error> {
         let path = path.as_ref();
 
@@ -234,11 +235,18 @@ impl Cache {
             fs::create_dir_all(parent)?;
         }
 
-        // Write cache file
-        let mut file = fs::File::create(path)?;
+        // Write to temporary file, then atomically rename (matching glibc)
+        let mut temp_name = path.as_os_str().to_os_string();
+        temp_name.push("~");
+        let temp_path = std::path::PathBuf::from(temp_name);
+
+        let mut file = fs::File::create(&temp_path)?;
         file.write_all(&self.data)?;
         file.flush()?;
+        file.set_permissions(fs::Permissions::from_mode(0o644))?;
         file.sync_all()?;
+
+        fs::rename(&temp_path, path)?;
 
         Ok(())
     }
