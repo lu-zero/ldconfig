@@ -9,6 +9,7 @@
 use crate::elf::{ElfArch, ElfLibrary};
 use crate::error::Error;
 use camino::{Utf8Path, Utf8PathBuf};
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use tracing::{trace, warn};
 
@@ -96,22 +97,20 @@ pub(crate) fn build_cache(libraries: &[ElfLibrary], prefix: &Utf8Path) -> Vec<u8
     // Header: unused[3] (12 bytes) - actual unused padding
     cache.extend_from_slice(&[0u8; 12]);
 
-    // Sort libraries FIRST before building anything
-    // Primary: filename in REVERSE alphabetical order (glibc behavior)
-    //          This puts libfoo.so.1 BEFORE libfoo.so
-    // Secondary: hwcap priority (higher hwcap = more specialized, comes first)
+    // Sort matching glibc's compare() in cache.c:
+    // Primary: reverse dl_cache_libcmp (swapped args)
+    // Secondary: flags descending
     let mut sorted_libs = libraries.to_vec();
     sorted_libs.sort_by(|a, b| {
         let filename_a = a.path.file_name().unwrap_or(a.path.as_str());
         let filename_b = b.path.file_name().unwrap_or(b.path.as_str());
-        match filename_b.cmp(filename_a) {
-            // REVERSED: b.cmp(a) instead of a.cmp(b)
-            std::cmp::Ordering::Equal => {
-                // Higher hwcap comes first (more specialized)
-                b.hwcap.unwrap_or(0).cmp(&a.hwcap.unwrap_or(0))
-            }
-            other => other,
+        let res = dl_cache_libcmp(filename_b, filename_a);
+        if res != Ordering::Equal {
+            return res;
         }
+        let flags_a = arch_to_flags(a.arch, a.is_64bit, a.is_hardfloat);
+        let flags_b = arch_to_flags(b.arch, b.is_64bit, b.is_hardfloat);
+        flags_b.cmp(&flags_a)
     });
 
     // Build string table from SORTED libraries
@@ -432,6 +431,48 @@ pub(crate) fn arch_to_flags(arch: ElfArch, is_64bit: bool, is_hardfloat: bool) -
             }
         }
     }
+}
+
+/// Numeric-aware string comparison matching glibc's `_dl_cache_libcmp`.
+/// Digits sort after non-digits; runs of digits compare numerically.
+fn dl_cache_libcmp(p1: &str, p2: &str) -> Ordering {
+    let b1 = p1.as_bytes();
+    let b2 = p2.as_bytes();
+    let mut i = 0;
+    let mut j = 0;
+
+    while i < b1.len() {
+        if b1[i].is_ascii_digit() {
+            if j < b2.len() && b2[j].is_ascii_digit() {
+                // Both digits: compare numerically
+                let mut val1: i32 = 0;
+                let mut val2: i32 = 0;
+                while i < b1.len() && b1[i].is_ascii_digit() {
+                    val1 = val1 * 10 + (b1[i] - b'0') as i32;
+                    i += 1;
+                }
+                while j < b2.len() && b2[j].is_ascii_digit() {
+                    val2 = val2 * 10 + (b2[j] - b'0') as i32;
+                    j += 1;
+                }
+                if val1 != val2 {
+                    return val1.cmp(&val2);
+                }
+            } else {
+                // p1 digit, p2 non-digit: digits sort after non-digits
+                return Ordering::Greater;
+            }
+        } else if j < b2.len() && b2[j].is_ascii_digit() {
+            return Ordering::Less;
+        } else if j >= b2.len() || b1[i] != b2[j] {
+            return b1.get(i).unwrap_or(&0).cmp(b2.get(j).unwrap_or(&0));
+        } else {
+            i += 1;
+            j += 1;
+        }
+    }
+    // p1 ended: compare NUL (0) vs p2's current char
+    0u8.cmp(b2.get(j).unwrap_or(&0))
 }
 
 fn add_string(table: &mut Vec<u8>, offsets: &mut HashMap<String, u32>, string: &str) {
