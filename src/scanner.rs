@@ -2,7 +2,7 @@ use crate::elf::{parse_elf_file, ElfLibrary};
 use crate::error::Error;
 use crate::hwcap::detect_hwcap_dirs;
 use camino::Utf8PathBuf;
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::Path;
 
 /// Check if a filename looks like a DSO (Dynamic Shared Object)
@@ -114,9 +114,10 @@ pub fn scan_all_libraries(
     Ok((real_files, symlinks))
 }
 
-/// Deduplicate libraries by (directory, filename) pair
+/// Deduplicate libraries by (directory, filename) pair, preserving order
 pub fn deduplicate_libraries(libraries: &[ElfLibrary]) -> Vec<ElfLibrary> {
-    let mut unique_libs: HashMap<(Utf8PathBuf, String), ElfLibrary> = HashMap::new();
+    let mut seen = HashSet::new();
+    let mut result = Vec::new();
 
     for lib in libraries {
         let dir = lib.path.parent().unwrap_or_else(|| "".as_ref()).to_owned();
@@ -125,33 +126,33 @@ pub fn deduplicate_libraries(libraries: &[ElfLibrary]) -> Vec<ElfLibrary> {
             .file_name()
             .unwrap_or(lib.path.as_str())
             .to_string();
-        let key = (dir, filename);
 
-        // Keep first occurrence
-        unique_libs.entry(key).or_insert_with(|| lib.clone());
+        if seen.insert((dir, filename)) {
+            result.push(lib.clone());
+        }
     }
 
-    unique_libs.into_values().collect()
+    result
 }
 
 /// Deduplicate scan directories by removing directories that are symlinks
 /// to canonical paths already in the list. Keep the CANONICAL path, not the symlink.
+/// Preserves first-occurrence order.
 pub fn deduplicate_scan_directories(dirs: &[Utf8PathBuf]) -> Vec<Utf8PathBuf> {
-    let mut canonical_to_first: HashMap<Utf8PathBuf, Utf8PathBuf> = HashMap::new();
+    let mut seen = HashSet::new();
+    let mut result = Vec::new();
 
     for dir in dirs {
-        // Get canonical path
         let canonical = if let Ok(canon) = dir.as_std_path().canonicalize() {
             Utf8PathBuf::try_from(canon).unwrap_or_else(|_| dir.clone())
         } else {
             dir.clone()
         };
 
-        // Keep the canonical path (not the symlink)
-        canonical_to_first
-            .entry(canonical.clone())
-            .or_insert(canonical);
+        if seen.insert(canonical.clone()) {
+            result.push(canonical);
+        }
     }
 
-    canonical_to_first.into_values().collect()
+    result
 }
