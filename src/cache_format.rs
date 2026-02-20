@@ -444,3 +444,169 @@ fn add_string(table: &mut Vec<u8>, offsets: &mut HashMap<String, u32>, string: &
         table.push(0); // NUL terminator
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn libcmp_identical() {
+        assert_eq!(
+            dl_cache_libcmp("libfoo.so.1", "libfoo.so.1"),
+            Ordering::Equal
+        );
+    }
+
+    #[test]
+    fn libcmp_numeric_order() {
+        // 2 < 10 numerically, so libfoo.so.2 < libfoo.so.10
+        assert_eq!(
+            dl_cache_libcmp("libfoo.so.2", "libfoo.so.10"),
+            Ordering::Less
+        );
+        assert_eq!(
+            dl_cache_libcmp("libfoo.so.10", "libfoo.so.2"),
+            Ordering::Greater
+        );
+    }
+
+    #[test]
+    fn libcmp_digit_after_nondigit() {
+        // Digits sort after non-digits
+        assert_eq!(
+            dl_cache_libcmp("libfoo.so.1a", "libfoo.so.1."),
+            Ordering::Greater
+        );
+    }
+
+    #[test]
+    fn libcmp_prefix() {
+        // "libfoo.so" < "libfoo.so.1" (shorter is prefix, NUL < '.')
+        assert_eq!(dl_cache_libcmp("libfoo.so", "libfoo.so.1"), Ordering::Less);
+    }
+
+    #[test]
+    fn libcmp_different_names() {
+        assert_eq!(dl_cache_libcmp("liba.so", "libb.so"), Ordering::Less);
+        assert_eq!(dl_cache_libcmp("libb.so", "liba.so"), Ordering::Greater);
+    }
+
+    #[test]
+    fn libcmp_multi_version() {
+        assert_eq!(
+            dl_cache_libcmp("libfoo.so.1.2.3", "libfoo.so.1.2.4"),
+            Ordering::Less
+        );
+        assert_eq!(
+            dl_cache_libcmp("libfoo.so.1.10", "libfoo.so.1.9"),
+            Ordering::Greater
+        );
+    }
+
+    #[test]
+    fn sort_order_matches_glibc() {
+        // glibc sorts reversed: higher version first, then higher flags first
+        let mut libs = vec![
+            ElfLibrary {
+                soname: "libfoo.so.1".into(),
+                path: "/usr/lib/libfoo.so".into(),
+                is_64bit: true,
+                arch: ElfArch::X86_64,
+                is_hardfloat: false,
+                osversion: 0,
+                hwcap: None,
+            },
+            ElfLibrary {
+                soname: "libfoo.so.1".into(),
+                path: "/usr/lib/libfoo.so.1".into(),
+                is_64bit: true,
+                arch: ElfArch::X86_64,
+                is_hardfloat: false,
+                osversion: 0,
+                hwcap: None,
+            },
+            ElfLibrary {
+                soname: "libfoo.so.1".into(),
+                path: "/usr/lib/libfoo.so.1.2.3".into(),
+                is_64bit: true,
+                arch: ElfArch::X86_64,
+                is_hardfloat: false,
+                osversion: 0,
+                hwcap: None,
+            },
+        ];
+
+        libs.sort_by(|a, b| {
+            let fa = a.path.file_name().unwrap();
+            let fb = b.path.file_name().unwrap();
+            dl_cache_libcmp(fb, fa)
+        });
+
+        let names: Vec<&str> = libs.iter().map(|l| l.path.file_name().unwrap()).collect();
+        // Reversed: highest version first
+        assert_eq!(names, ["libfoo.so.1.2.3", "libfoo.so.1", "libfoo.so"]);
+    }
+
+    #[test]
+    fn round_trip_build_parse() {
+        let libs = vec![
+            ElfLibrary {
+                soname: "libtest.so.1".into(),
+                path: "/usr/lib/libtest.so.1".into(),
+                is_64bit: true,
+                arch: ElfArch::X86_64,
+                is_hardfloat: false,
+                osversion: 0,
+                hwcap: None,
+            },
+            ElfLibrary {
+                soname: "libother.so.2".into(),
+                path: "/usr/lib/libother.so.2".into(),
+                is_64bit: true,
+                arch: ElfArch::X86_64,
+                is_hardfloat: false,
+                osversion: 0,
+                hwcap: None,
+            },
+        ];
+
+        let data = build_cache(&libs, Utf8Path::new("/"));
+        let info = parse_cache(&data).unwrap();
+
+        assert_eq!(info.entries.len(), 2);
+        assert!(info.generator.as_ref().unwrap().starts_with("ldconfig-rs"));
+
+        // Verify strings are extractable at the stored offsets
+        for entry in &info.entries {
+            let key_start = entry.key_offset as usize;
+            let val_start = entry.value_offset as usize;
+            assert!(key_start < data.len());
+            assert!(val_start < data.len());
+            // Should be null-terminated valid UTF-8
+            let key_end = data[key_start..].iter().position(|&b| b == 0).unwrap();
+            let val_end = data[val_start..].iter().position(|&b| b == 0).unwrap();
+            let key = std::str::from_utf8(&data[key_start..key_start + key_end]).unwrap();
+            let val = std::str::from_utf8(&data[val_start..val_start + val_end]).unwrap();
+            assert!(key.contains(".so"));
+            assert!(val.contains(".so"));
+        }
+    }
+
+    #[test]
+    fn arch_flags_x86_64() {
+        assert_eq!(
+            arch_to_flags(ElfArch::X86_64, true, false),
+            FLAG_X8664_LIB64 | FLAG_ELF_LIBC6
+        );
+        assert_eq!(arch_to_flags(ElfArch::X86_64, false, false), FLAG_ELF_LIBC6);
+    }
+
+    #[test]
+    fn arch_flags_arm() {
+        assert_eq!(
+            arch_to_flags(ElfArch::ARM, false, true),
+            FLAG_ARM_LIBHF | FLAG_ELF_LIBC6
+        );
+        assert_eq!(arch_to_flags(ElfArch::ARM, false, false), FLAG_ELF_LIBC6);
+    }
+}
