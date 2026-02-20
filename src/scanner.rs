@@ -156,3 +156,64 @@ pub fn deduplicate_scan_directories(dirs: &[Utf8PathBuf]) -> Vec<Utf8PathBuf> {
 
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::elf::{ElfArch, ElfLibrary};
+
+    #[test]
+    fn is_dso_standard_libs() {
+        assert!(is_dso("libfoo.so"));
+        assert!(is_dso("libfoo.so.1"));
+        assert!(is_dso("libfoo.so.1.2.3"));
+        assert!(is_dso("ld-linux-x86-64.so.2"));
+        assert!(is_dso("ld.so.1"));
+        assert!(is_dso("ld64.so.2"));
+    }
+
+    #[test]
+    fn is_dso_rejects_non_libs() {
+        assert!(!is_dso("foo.txt"));
+        assert!(!is_dso("libfoo.a"));
+        assert!(!is_dso("README.md"));
+        assert!(!is_dso("foo.so")); // no lib/ld prefix
+    }
+
+    fn make_lib(path: &str) -> ElfLibrary {
+        ElfLibrary {
+            soname: "libtest.so.1".into(),
+            path: Utf8PathBuf::from(path),
+            is_64bit: true,
+            arch: ElfArch::X86_64,
+            is_hardfloat: false,
+            osversion: 0,
+            hwcap: None,
+        }
+    }
+
+    #[test]
+    fn dedup_preserves_order() {
+        let libs = vec![
+            make_lib("/usr/lib/libfoo.so.1"),
+            make_lib("/usr/lib/libbar.so.1"),
+            make_lib("/usr/lib/libfoo.so.1"), // duplicate
+            make_lib("/usr/lib/libbaz.so.1"),
+        ];
+
+        let result = deduplicate_libraries(&libs);
+        let names: Vec<&str> = result.iter().map(|l| l.path.file_name().unwrap()).collect();
+        assert_eq!(names, ["libfoo.so.1", "libbar.so.1", "libbaz.so.1"]);
+    }
+
+    #[test]
+    fn dedup_same_filename_different_dirs() {
+        let libs = vec![
+            make_lib("/usr/lib/libfoo.so.1"),
+            make_lib("/lib/libfoo.so.1"),
+        ];
+
+        let result = deduplicate_libraries(&libs);
+        assert_eq!(result.len(), 2); // different dirs, both kept
+    }
+}
