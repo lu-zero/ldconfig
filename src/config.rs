@@ -118,9 +118,8 @@ fn parse_config_content(content: &str) -> Result<RawConfig, Error> {
         }
 
         // Handle include directives
-        if line.starts_with("include ") {
-            let pattern = line[8..].trim();
-            config.include_patterns.push(pattern.to_string());
+        if let Some(pattern) = line.strip_prefix("include ") {
+            config.include_patterns.push(pattern.trim().to_string());
         } else {
             // Add directory
             config.directories.push(Utf8PathBuf::from(line));
@@ -141,17 +140,10 @@ fn expand_includes(config: &RawConfig, base_dir: &Utf8Path) -> Result<Vec<Utf8Pa
         for entry in glob::glob(full_pattern.as_str())? {
             match entry {
                 Ok(path) => {
-                    if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("conf") {
-                        // This is a config file, parse it
+                    if path.is_file() {
                         let content = std::fs::read_to_string(&path)?;
-
-                        // Parse the content as a config file
                         let included_config = parse_config_content(&content)?;
-
-                        // Add the directories from this included config
-                        for dir in included_config.directories {
-                            included_dirs.push(dir);
-                        }
+                        included_dirs.extend(included_config.directories);
                     }
                 }
                 Err(e) => {

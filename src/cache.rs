@@ -78,21 +78,18 @@ impl<'a> Iterator for CacheEntries<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let entries = self.entries.as_mut()?;
+        let entry = entries.next()?;
+        let soname = self.cache.extract_string(entry.key_offset).ok()?;
+        let path = self.cache.extract_string(entry.value_offset).ok()?;
+        let arch = decode_arch_flags(entry.flags);
 
-        loop {
-            let entry = entries.next()?;
-            let soname = self.cache.extract_string(entry.key_offset).ok()?;
-            let path = self.cache.extract_string(entry.value_offset).ok()?;
-            let arch = decode_arch_flags(entry.flags);
-
-            return Some(CacheEntry {
-                soname,
-                path,
-                arch: arch.to_string(),
-                hwcap: entry.hwcap,
-                flags: entry.flags,
-            });
-        }
+        Some(CacheEntry {
+            soname,
+            path,
+            arch: arch.to_string(),
+            hwcap: entry.hwcap,
+            flags: entry.flags,
+        })
     }
 }
 
