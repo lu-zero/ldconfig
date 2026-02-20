@@ -77,11 +77,11 @@ pub(crate) fn build_cache(libraries: &[ElfLibrary], prefix: &Utf8Path) -> Vec<u8
 
     // Header: nlibs (4 bytes) - placeholder
     let nlibs_pos = cache.len();
-    cache.extend_from_slice(&0u32.to_le_bytes());
+    cache.extend_from_slice(&0u32.to_ne_bytes());
 
     // Header: len_strings (4 bytes) - placeholder
     let len_strings_pos = cache.len();
-    cache.extend_from_slice(&0u32.to_le_bytes());
+    cache.extend_from_slice(&0u32.to_ne_bytes());
 
     // Header: flags (1 byte) - endianness flag
     // Values: 0 = unset, 1 = invalid, 2 = little endian, 3 = big endian
@@ -92,7 +92,7 @@ pub(crate) fn build_cache(libraries: &[ElfLibrary], prefix: &Utf8Path) -> Vec<u8
     cache.extend_from_slice(&[0u8; 3]);
 
     // Header: extension_offset (4 bytes) - offset to extension section (0 = no extensions)
-    cache.extend_from_slice(&0u32.to_le_bytes());
+    cache.extend_from_slice(&0u32.to_ne_bytes());
 
     // Header: unused[3] (12 bytes) - actual unused padding
     cache.extend_from_slice(&[0u8; 12]);
@@ -224,11 +224,11 @@ pub(crate) fn build_cache(libraries: &[ElfLibrary], prefix: &Utf8Path) -> Vec<u8
         };
 
         // Write entry in little-endian format (24 bytes total)
-        cache.extend_from_slice(&entry.flags.to_le_bytes());
-        cache.extend_from_slice(&entry.key_offset.to_le_bytes());
-        cache.extend_from_slice(&entry.value_offset.to_le_bytes());
-        cache.extend_from_slice(&entry.osversion.to_le_bytes());
-        cache.extend_from_slice(&entry.hwcap.to_le_bytes());
+        cache.extend_from_slice(&entry.flags.to_ne_bytes());
+        cache.extend_from_slice(&entry.key_offset.to_ne_bytes());
+        cache.extend_from_slice(&entry.value_offset.to_ne_bytes());
+        cache.extend_from_slice(&entry.osversion.to_ne_bytes());
+        cache.extend_from_slice(&entry.hwcap.to_ne_bytes());
     }
 
     // Append string table
@@ -242,8 +242,8 @@ pub(crate) fn build_cache(libraries: &[ElfLibrary], prefix: &Utf8Path) -> Vec<u8
     // Add extension section with generator information
     let extension_offset = cache.len() as u32;
 
-    cache.extend_from_slice(&EXTENSION_MAGIC.to_le_bytes());
-    cache.extend_from_slice(&1u32.to_le_bytes()); // 1 extension
+    cache.extend_from_slice(&EXTENSION_MAGIC.to_ne_bytes());
+    cache.extend_from_slice(&1u32.to_ne_bytes()); // 1 extension
 
     // Calculate where the generator data will be
     let generator_data_offset = extension_offset + 4 + 4 + 16;
@@ -253,10 +253,10 @@ pub(crate) fn build_cache(libraries: &[ElfLibrary], prefix: &Utf8Path) -> Vec<u8
     let generator_bytes = generator.as_bytes();
 
     // Extension section descriptor
-    cache.extend_from_slice(&0u32.to_le_bytes()); // tag: 0 (generator)
-    cache.extend_from_slice(&0u32.to_le_bytes()); // flags: 0
-    cache.extend_from_slice(&generator_data_offset.to_le_bytes()); // offset to data
-    cache.extend_from_slice(&(generator_bytes.len() as u32).to_le_bytes()); // size
+    cache.extend_from_slice(&0u32.to_ne_bytes()); // tag: 0 (generator)
+    cache.extend_from_slice(&0u32.to_ne_bytes()); // flags: 0
+    cache.extend_from_slice(&generator_data_offset.to_ne_bytes()); // offset to data
+    cache.extend_from_slice(&(generator_bytes.len() as u32).to_ne_bytes()); // size
 
     // Append the actual generator string (null-terminated)
     cache.extend_from_slice(generator_bytes);
@@ -266,9 +266,9 @@ pub(crate) fn build_cache(libraries: &[ElfLibrary], prefix: &Utf8Path) -> Vec<u8
     let nlibs = sorted_libs.len() as u32;
     let len_strings = string_table.len() as u32;
 
-    cache[nlibs_pos..nlibs_pos + 4].copy_from_slice(&nlibs.to_le_bytes());
-    cache[len_strings_pos..len_strings_pos + 4].copy_from_slice(&len_strings.to_le_bytes());
-    cache[32..36].copy_from_slice(&extension_offset.to_le_bytes());
+    cache[nlibs_pos..nlibs_pos + 4].copy_from_slice(&nlibs.to_ne_bytes());
+    cache[len_strings_pos..len_strings_pos + 4].copy_from_slice(&len_strings.to_ne_bytes());
+    cache[32..36].copy_from_slice(&extension_offset.to_ne_bytes());
 
     cache
 }
@@ -289,31 +289,31 @@ pub(crate) fn parse_cache(data: &[u8]) -> Result<CacheInfo, Error> {
 
     for i in 0..nlibs {
         let offset = header_size + (i as usize * entry_size);
-        let flags = u32::from_le_bytes([
+        let flags = u32::from_ne_bytes([
             data[offset],
             data[offset + 1],
             data[offset + 2],
             data[offset + 3],
         ]);
-        let key_offset = u32::from_le_bytes([
+        let key_offset = u32::from_ne_bytes([
             data[offset + 4],
             data[offset + 5],
             data[offset + 6],
             data[offset + 7],
         ]);
-        let value_offset = u32::from_le_bytes([
+        let value_offset = u32::from_ne_bytes([
             data[offset + 8],
             data[offset + 9],
             data[offset + 10],
             data[offset + 11],
         ]);
-        let osversion = u32::from_le_bytes([
+        let osversion = u32::from_ne_bytes([
             data[offset + 12],
             data[offset + 13],
             data[offset + 14],
             data[offset + 15],
         ]);
-        let hwcap = u64::from_le_bytes([
+        let hwcap = u64::from_ne_bytes([
             data[offset + 16],
             data[offset + 17],
             data[offset + 18],
@@ -351,11 +351,11 @@ pub(crate) fn parse_cache(data: &[u8]) -> Result<CacheInfo, Error> {
     }
 
     // Parse extension section
-    let extension_offset = u32::from_le_bytes([data[32], data[33], data[34], data[35]]) as usize;
+    let extension_offset = u32::from_ne_bytes([data[32], data[33], data[34], data[35]]) as usize;
     let mut generator = None;
 
     if extension_offset > 0 && extension_offset + 24 <= data.len() {
-        let ext_magic = u32::from_le_bytes([
+        let ext_magic = u32::from_ne_bytes([
             data[extension_offset],
             data[extension_offset + 1],
             data[extension_offset + 2],
@@ -363,7 +363,7 @@ pub(crate) fn parse_cache(data: &[u8]) -> Result<CacheInfo, Error> {
         ]);
 
         if ext_magic == EXTENSION_MAGIC {
-            let ext_count = u32::from_le_bytes([
+            let ext_count = u32::from_ne_bytes([
                 data[extension_offset + 4],
                 data[extension_offset + 5],
                 data[extension_offset + 6],
@@ -373,19 +373,19 @@ pub(crate) fn parse_cache(data: &[u8]) -> Result<CacheInfo, Error> {
             for i in 0..ext_count as usize {
                 let section_offset = extension_offset + 8 + (i * 16);
                 if section_offset + 16 <= data.len() {
-                    let tag = u32::from_le_bytes([
+                    let tag = u32::from_ne_bytes([
                         data[section_offset],
                         data[section_offset + 1],
                         data[section_offset + 2],
                         data[section_offset + 3],
                     ]);
-                    let data_offset = u32::from_le_bytes([
+                    let data_offset = u32::from_ne_bytes([
                         data[section_offset + 8],
                         data[section_offset + 9],
                         data[section_offset + 10],
                         data[section_offset + 11],
                     ]) as usize;
-                    let data_size = u32::from_le_bytes([
+                    let data_size = u32::from_ne_bytes([
                         data[section_offset + 12],
                         data[section_offset + 13],
                         data[section_offset + 14],
