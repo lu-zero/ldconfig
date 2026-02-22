@@ -57,7 +57,7 @@ pub struct CacheEntry {
     pub flags: u32,
     pub key_offset: u32,
     pub value_offset: u32,
-    pub osversion: u32,
+    pub _osversion: u32, // Legacy field, always 0, kept for compatibility
     pub hwcap: u64,
 }
 
@@ -247,7 +247,7 @@ pub(crate) fn parse_cache(data: &[u8]) -> Result<CacheInfo, Error> {
             flags,
             key_offset,
             value_offset,
-            osversion,
+            _osversion: osversion,
             hwcap,
         });
     }
