@@ -38,6 +38,8 @@ pub(crate) mod hwcap;
 pub(crate) mod scanner;
 pub(crate) mod symlinks;
 
+mod atomic_write;
+
 mod cache;
 mod config;
 mod error;

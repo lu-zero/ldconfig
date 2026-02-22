@@ -29,13 +29,11 @@ use crate::scanner::{
     deduplicate_libraries, deduplicate_scan_directories, scan_all_libraries, should_include_symlink,
 };
 use crate::symlinks;
-use crate::{error::Error, SearchPaths};
+use crate::{atomic_write, error::Error, SearchPaths};
 use bon::bon;
 use camino::Utf8Path;
 use std::fmt;
 use std::fs;
-use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use tracing::{debug, info};
 
@@ -226,28 +224,9 @@ impl Cache {
             .filter(move |entry| entry.soname.contains(name))
     }
 
-    /// Write cache to file atomically (write to temp, fsync, rename)
+    /// Write cache to file atomically
     pub fn write_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), Error> {
-        let path = path.as_ref();
-
-        // Ensure parent directory exists
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-
-        // Write to temporary file, then atomically rename (matching glibc)
-        let mut temp_name = path.as_os_str().to_os_string();
-        temp_name.push("~");
-        let temp_path = std::path::PathBuf::from(temp_name);
-
-        let mut file = fs::File::create(&temp_path)?;
-        file.write_all(&self.data)?;
-        file.flush()?;
-        file.set_permissions(fs::Permissions::from_mode(0o644))?;
-        file.sync_all()?;
-
-        fs::rename(&temp_path, path)?;
-
+        atomic_write::atomic_write(path, &self.data)?;
         Ok(())
     }
 
