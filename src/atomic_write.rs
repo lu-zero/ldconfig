@@ -8,31 +8,8 @@ use std::io::Write;
 use std::path::Path;
 use tempfile::NamedTempFile;
 
-/// Write data to a file atomically
-///
-/// This function creates a temporary file in the same directory as the target,
-/// writes all data to it, syncs to disk, then atomically renames it to the final location.
-/// This ensures that the target file is either fully written or not changed at all.
-///
-/// # Arguments
-///
-/// * `path` - The target file path
-/// * `data` - The data to write
-///
-/// # Returns
-///
-/// `Ok(())` on success, or `Err` with the specific I/O error
-///
-/// # Examples
-///
-/// ```no_run
-/// use ldconfig::atomic_write;
-///
-/// let data = b"Hello, world!";
-/// atomic_write::atomic_write("/path/to/file.txt", data)?;
-/// # Ok::<(), std::io::Error>(())
-/// ```
-pub fn atomic_write<P: AsRef<Path>>(path: P, data: &[u8]) -> std::io::Result<()> {
+/// Write data to a file atomically using tempfile for robustness
+pub(crate) fn atomic_write<P: AsRef<Path>>(path: P, data: &[u8]) -> std::io::Result<()> {
     let path = path.as_ref();
 
     // Ensure parent directory exists
@@ -54,7 +31,9 @@ pub fn atomic_write<P: AsRef<Path>>(path: P, data: &[u8]) -> std::io::Result<()>
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        temp_file.as_file().set_permissions(fs::Permissions::from_mode(0o644))?;
+        temp_file
+            .as_file()
+            .set_permissions(fs::Permissions::from_mode(0o644))?;
     }
 
     // Atomically persist to final location

@@ -66,8 +66,8 @@ impl ElfLibrary {
 
 impl PartialEq for ElfLibrary {
     fn eq(&self, other: &Self) -> bool {
-        self.sort_key_filename() == other.sort_key_filename() &&
-        self.sort_key_hwcap() == other.sort_key_hwcap()
+        self.sort_key_filename() == other.sort_key_filename()
+            && self.sort_key_hwcap() == other.sort_key_hwcap()
     }
 }
 
@@ -89,9 +89,7 @@ impl Ord for ElfLibrary {
         let filename_b = other.sort_key_filename();
 
         match dl_cache_libcmp(filename_b, filename_a) {
-            std::cmp::Ordering::Equal => {
-                other.sort_key_hwcap().cmp(&self.sort_key_hwcap())
-            }
+            std::cmp::Ordering::Equal => other.sort_key_hwcap().cmp(&self.sort_key_hwcap()),
             ordering => ordering,
         }
     }
