@@ -52,6 +52,51 @@ pub struct ElfLibrary {
     pub hwcap: Option<u64>,
 }
 
+impl ElfLibrary {
+    /// Get the filename for sorting purposes
+    fn sort_key_filename(&self) -> &str {
+        self.path.file_name().unwrap_or(self.path.as_str())
+    }
+
+    /// Get the hwcap for sorting purposes
+    fn sort_key_hwcap(&self) -> u64 {
+        self.hwcap.unwrap_or(0)
+    }
+}
+
+impl PartialEq for ElfLibrary {
+    fn eq(&self, other: &Self) -> bool {
+        self.sort_key_filename() == other.sort_key_filename() &&
+        self.sort_key_hwcap() == other.sort_key_hwcap()
+    }
+}
+
+impl Eq for ElfLibrary {}
+
+impl PartialOrd for ElfLibrary {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ElfLibrary {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Primary: reverse filename order using glibc's dl_cache_libcmp
+        // Secondary: hwcap descending (higher first)
+        use crate::cache_format::dl_cache_libcmp;
+
+        let filename_a = self.sort_key_filename();
+        let filename_b = other.sort_key_filename();
+
+        match dl_cache_libcmp(filename_b, filename_a) {
+            std::cmp::Ordering::Equal => {
+                other.sort_key_hwcap().cmp(&self.sort_key_hwcap())
+            }
+            ordering => ordering,
+        }
+    }
+}
+
 pub fn parse_elf_file(path: &Path) -> Option<ElfLibrary> {
     let file = File::open(path).ok()?;
     let mmap = unsafe { Mmap::map(&file).ok()? };

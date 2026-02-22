@@ -98,20 +98,10 @@ pub(crate) fn build_cache(libraries: &[ElfLibrary], prefix: &Utf8Path) -> Vec<u8
     cache.extend_from_slice(&[0u8; 12]);
 
     // Sort matching glibc's compare() in cache.c:
-    // Primary: reverse dl_cache_libcmp (swapped args)
-    // Secondary: flags descending
+    // Sort libraries using our custom Ord implementation
+    // This matches glibc behavior: reverse filename order + hwcap descending
     let mut sorted_libs = libraries.to_vec();
-    sorted_libs.sort_by(|a, b| {
-        let filename_a = a.path.file_name().unwrap_or(a.path.as_str());
-        let filename_b = b.path.file_name().unwrap_or(b.path.as_str());
-        let res = dl_cache_libcmp(filename_b, filename_a);
-        if res != Ordering::Equal {
-            return res;
-        }
-        let flags_a = arch_to_flags(a.arch, a.is_64bit, a.is_hardfloat);
-        let flags_b = arch_to_flags(b.arch, b.is_64bit, b.is_hardfloat);
-        flags_b.cmp(&flags_a)
-    });
+    sorted_libs.sort();
 
     // Pre-compute cache paths for each library (filename, absolute_path)
     let lib_paths: Vec<(&str, String)> = sorted_libs
@@ -396,7 +386,7 @@ fn cache_path_for_lib(lib_path: &Utf8Path, prefix: &Utf8Path, has_prefix: bool) 
 
 /// Numeric-aware string comparison matching glibc's `_dl_cache_libcmp`.
 /// Digits sort after non-digits; runs of digits compare numerically.
-fn dl_cache_libcmp(p1: &str, p2: &str) -> Ordering {
+pub(crate) fn dl_cache_libcmp(p1: &str, p2: &str) -> Ordering {
     let b1 = p1.as_bytes();
     let b2 = p2.as_bytes();
     let mut i = 0;
