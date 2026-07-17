@@ -40,8 +40,10 @@ pub(crate) fn is_dso(name: &str) -> bool {
 /// Temporary files from prelink, RPM, and dpkg; glibc's
 /// skip_dso_based_on_name.
 fn is_temp_dso(name: &str) -> bool {
-    name.ends_with(".#prelink#")
-        || name.contains(".#prelink#.")
+    let b = name.as_bytes();
+    // ".#prelink#" suffix or ".#prelink#.XXXXXX" (6-char random suffix).
+    b.ends_with(b".#prelink#")
+        || (b.len() >= 17 && &b[b.len() - 17..b.len() - 6] == b".#prelink#.")
         || name.contains(';')
         || name.ends_with(".dpkg-new")
         || name.ends_with(".dpkg-tmp")
@@ -178,10 +180,13 @@ pub(crate) fn scan_dir(sd: &ScanDir, prefix: &Utf8Path, remove_stale_links: bool
         }
 
         let full = sd.real.join(&name);
+        let mut inspect_path = full.clone();
         if is_link {
-            let target = match resolve(prefix, &sd.path.join(&name)) {
-                Some(t) => t,
-                None => full.clone(),
+            // glibc resolves the link inside the root (chroot_canon) and
+            // inspects the resolved file; failed resolution skips the
+            // entry untouched.
+            let Some(target) = resolve(prefix, &sd.path.join(&name)) else {
+                continue;
             };
             match fs::metadata(&target) {
                 Ok(md) if md.is_file() => {}
@@ -194,11 +199,12 @@ pub(crate) fn scan_dir(sd: &ScanDir, prefix: &Utf8Path, remove_stale_links: bool
                     continue;
                 }
             }
+            inspect_path = target;
         } else if !ft.is_file() {
             continue;
         }
 
-        let Some(info) = elf::inspect(full.as_std_path()) else {
+        let Some(info) = elf::inspect(inspect_path.as_std_path()) else {
             continue;
         };
         let mut soname = info.soname.unwrap_or_else(|| name.clone());
@@ -262,6 +268,8 @@ mod tests {
         assert!(is_temp_dso("libfoo.so.1;5f3a"));
         assert!(is_temp_dso("libfoo.so.1.dpkg-new"));
         assert!(!is_temp_dso("libfoo.so.1"));
+        // The prelink check is suffix-anchored, like glibc's.
+        assert!(!is_temp_dso("libp.#prelink#.so.1"));
     }
 
     fn lib(name: &str, soname: &str, is_link: bool) -> DirLib {

@@ -85,7 +85,12 @@ fn inspect_bytes(data: &[u8], path: &Path) -> Option<ElfInfo> {
     let ctx = Ctx::new(header.container().ok()?, header.endianness().ok()?);
     let phdrs =
         ProgramHeader::parse(data, header.e_phoff as usize, header.e_phnum as usize, ctx).ok()?;
-    if !phdrs.iter().any(|ph| ph.p_type == PT_DYNAMIC) {
+    // Non-empty PT_DYNAMIC required; the last one wins like glibc.
+    if !phdrs
+        .iter()
+        .rfind(|ph| ph.p_type == PT_DYNAMIC)
+        .is_some_and(|ph| ph.p_filesz > 0)
+    {
         debug!("{}: missing PT_DYNAMIC", path.display());
         return None;
     }

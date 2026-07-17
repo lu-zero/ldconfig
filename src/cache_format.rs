@@ -93,7 +93,8 @@ pub(crate) fn build_cache(entries: &[FileEntry]) -> Vec<u8> {
     let mut sorted: Vec<&FileEntry> = entries.iter().collect();
     sorted.sort_by(|a, b| compare(a, b));
 
-    // glibc-hwcaps subdirectory names, indexed in first-use order.
+    // glibc-hwcaps subdirectory names, indexed in name order like
+    // assign_glibc_hwcaps_indices.
     let mut hwcaps_names: Vec<&str> = Vec::new();
     for e in entries {
         if let Some(n) = &e.hwcaps {
@@ -102,6 +103,7 @@ pub(crate) fn build_cache(entries: &[FileEntry]) -> Vec<u8> {
             }
         }
     }
+    hwcaps_names.sort_unstable();
 
     let string_table_offset = HEADER_SIZE + sorted.len() * ENTRY_SIZE;
     let mut table: Vec<u8> = Vec::new();
@@ -222,8 +224,9 @@ pub(crate) fn parse_cache(data: &[u8]) -> Result<CacheInfo, Error> {
     }
     let nlibs = read_u32(data, 20).unwrap() as usize;
     let len_strings = read_u32(data, 24).unwrap() as usize;
-    // 0 = unset (written by older ldconfig), otherwise must match.
-    if data[28] != 0 && data[28] != ENDIAN_CURRENT {
+    // 0 = unset (written by older ldconfig); only the low two bits carry
+    // the byte order, the rest is ignored by readers (dl-cache.h).
+    if data[28] != 0 && (data[28] & 3) != ENDIAN_CURRENT {
         return Err(Error::InvalidCache("wrong endianness"));
     }
 
@@ -279,6 +282,7 @@ pub(crate) fn parse_cache(data: &[u8]) -> Result<CacheInfo, Error> {
         }
     }
 
+    let strtab = entries_end..entries_end + len_strings;
     let mut entries = Vec::with_capacity(nlibs);
     for i in 0..nlibs {
         let off = HEADER_SIZE + i * ENTRY_SIZE;
@@ -286,6 +290,10 @@ pub(crate) fn parse_cache(data: &[u8]) -> Result<CacheInfo, Error> {
         let key_offset = read_u32(data, off + 4).unwrap();
         let value_offset = read_u32(data, off + 8).unwrap();
         let hwcap = read_u64(data, off + 16).unwrap();
+
+        if !strtab.contains(&(key_offset as usize)) || !strtab.contains(&(value_offset as usize)) {
+            return Err(Error::InvalidCache("entry string offset out of range"));
+        }
 
         let hwcaps =
             if (hwcap >> 32) & !DL_CACHE_HWCAP_ISA_LEVEL_MASK == DL_CACHE_HWCAP_EXTENSION >> 32 {
