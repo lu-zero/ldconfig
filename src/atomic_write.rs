@@ -36,8 +36,7 @@ pub(crate) fn atomic_write<P: AsRef<Path>>(path: P, data: &[u8]) -> std::io::Res
             .set_permissions(fs::Permissions::from_mode(0o644))?;
     }
 
-    // Atomically persist to final location
-    // This will fail if the target already exists (which is what we want)
+    // Atomically replace the target via rename(2).
     temp_file.persist(path)?;
 
     Ok(())

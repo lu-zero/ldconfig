@@ -1,164 +1,168 @@
-use crate::elf::ElfLibrary;
-use crate::error::Error;
-use camino::Utf8PathBuf;
+//! Symlink management, mirroring glibc's create_links.
+
+use crate::chroot::chroot_canon;
+use camino::Utf8Path;
 use std::fs;
-use std::path::Path;
+use std::io;
+use std::os::unix::fs::MetadataExt;
+use tracing::{debug, warn};
 
-#[derive(Debug, Clone)]
-pub struct SymlinkAction {
-    pub target: Utf8PathBuf,
-    pub link: Utf8PathBuf,
-}
-
-fn create_symlink(target: &Path, link: &Path) -> Result<(), Error> {
-    std::os::unix::fs::symlink(target, link)?;
-    Ok(())
-}
-
-pub fn update(
-    _dir: &Path,
-    libraries: &[ElfLibrary],
-    dry_run: bool,
-) -> Result<Vec<SymlinkAction>, Error> {
-    let mut actions = Vec::new();
-
-    // Group libraries by their SONAME
-    let mut soname_map: std::collections::HashMap<String, Vec<&ElfLibrary>> =
-        std::collections::HashMap::new();
-
-    for lib in libraries {
-        // Only consider real files (not symlinks)
-        let is_symlink = std::fs::symlink_metadata(&lib.path)
-            .map(|m| m.file_type().is_symlink())
-            .unwrap_or(false);
-
-        if !is_symlink {
-            soname_map.entry(lib.soname.clone()).or_default().push(lib);
-        }
+/// stat() that resolves symlinks inside the -r root (glibc chroot_stat).
+fn chroot_stat(prefix: &Utf8Path, real: &Utf8Path, logical: &Utf8Path) -> io::Result<fs::Metadata> {
+    if prefix == "/" {
+        return fs::metadata(real);
     }
+    let md = fs::symlink_metadata(real)?;
+    if !md.file_type().is_symlink() {
+        return Ok(md);
+    }
+    let canon =
+        chroot_canon(prefix, logical).ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
+    fs::metadata(canon)
+}
 
-    // For each SONAME, find the highest-versioned library and create symlink
-    for (soname, libs) in soname_map {
-        if libs.is_empty() {
-            continue;
-        }
+/// Create or update the `soname` -> `libname` symlink in one directory.
+/// Never removes anything that is not a symlink.
+pub(crate) fn create_link(
+    prefix: &Utf8Path,
+    real_dir: &Utf8Path,
+    dir: &Utf8Path,
+    libname: &str,
+    soname: &str,
+) {
+    if libname == soname {
+        return;
+    }
+    let link = real_dir.join(soname);
+    let target = real_dir.join(libname);
 
-        // Find the highest-versioned library (by filename numerical comparison)
-        let best_lib = find_highest_version_library(&libs);
-
-        let filename = best_lib.path.file_name().unwrap_or("");
-
-        // Only create symlink if SONAME != filename (avoid self-referencing symlinks)
-        if filename != soname {
-            let symlink_path = best_lib.path.parent().unwrap().join(&soname);
-
-            // Target is just the filename (relative symlink in same directory)
-            let target_path = Path::new(filename);
-
-            if should_create_symlink(symlink_path.as_std_path(), best_lib.path.as_std_path())? {
-                actions.push(SymlinkAction {
-                    target: Utf8PathBuf::from(filename),
-                    link: Utf8PathBuf::try_from(symlink_path.clone())
-                        .map_err(|_| Error::InvalidPathUtf8)?,
-                });
-
-                if !dry_run {
-                    // Remove existing symlink/file if it exists
-                    if symlink_path.exists() || symlink_path.symlink_metadata().is_ok() {
-                        let _ = fs::remove_file(&symlink_path);
-                    }
-                    create_symlink(target_path, symlink_path.as_std_path())?;
+    let mut do_remove = true;
+    match chroot_stat(prefix, &link, &dir.join(soname)) {
+        Ok(st_so) => {
+            let Ok(st_lib) = chroot_stat(prefix, &target, &dir.join(libname)) else {
+                warn!("Can't stat {}/{}", dir, libname);
+                return;
+            };
+            if st_so.dev() == st_lib.dev() && st_so.ino() == st_lib.ino() {
+                return; // link is already correct
+            }
+            match fs::symlink_metadata(&link) {
+                Ok(md) if md.file_type().is_symlink() => {}
+                _ => {
+                    warn!("{}/{} is not a symbolic link", dir, soname);
+                    return;
                 }
             }
         }
-    }
-
-    Ok(actions)
-}
-
-/// Find the library with the highest version by comparing filenames numerically
-/// Uses the same algorithm as glibc's _dl_cache_libcmp
-fn find_highest_version_library<'a>(libs: &'a [&'a ElfLibrary]) -> &'a ElfLibrary {
-    libs.iter()
-        .max_by(|a, b| {
-            let filename_a = a.path.file_name().unwrap_or("");
-            let filename_b = b.path.file_name().unwrap_or("");
-            compare_library_versions(filename_a, filename_b)
-        })
-        .unwrap_or(&libs[0])
-}
-
-/// Compare library versions numerically, like glibc's _dl_cache_libcmp
-/// Higher version returns Greater
-fn compare_library_versions(a: &str, b: &str) -> std::cmp::Ordering {
-    let mut a_chars = a.chars().peekable();
-    let mut b_chars = b.chars().peekable();
-
-    loop {
-        let a_ch = a_chars.peek().copied();
-        let b_ch = b_chars.peek().copied();
-
-        match (a_ch, b_ch) {
-            (None, None) => return std::cmp::Ordering::Equal,
-            (None, Some(_)) => return std::cmp::Ordering::Less,
-            (Some(_), None) => return std::cmp::Ordering::Greater,
-            (Some(ac), Some(bc)) => {
-                // If both are digits, compare numerically
-                if ac.is_ascii_digit() && bc.is_ascii_digit() {
-                    let mut a_num = 0u64;
-                    let mut b_num = 0u64;
-
-                    while let Some(&ch) = a_chars.peek() {
-                        if ch.is_ascii_digit() {
-                            a_num = a_num * 10 + (ch as u64 - '0' as u64);
-                            a_chars.next();
-                        } else {
-                            break;
-                        }
-                    }
-
-                    while let Some(&ch) = b_chars.peek() {
-                        if ch.is_ascii_digit() {
-                            b_num = b_num * 10 + (ch as u64 - '0' as u64);
-                            b_chars.next();
-                        } else {
-                            break;
-                        }
-                    }
-
-                    if a_num != b_num {
-                        return a_num.cmp(&b_num); // Higher number is greater
-                    }
-                } else {
-                    // Compare characters normally
-                    if ac != bc {
-                        return ac.cmp(&bc);
-                    }
-                    a_chars.next();
-                    b_chars.next();
-                }
-            }
+        Err(_) => {
+            // Unless it is a stale symlink, there is no need to remove.
+            do_remove = matches!(fs::symlink_metadata(&link),
+                                 Ok(md) if md.file_type().is_symlink());
         }
     }
+
+    if do_remove {
+        if let Err(e) = fs::remove_file(&link) {
+            warn!("Can't unlink {}/{}: {}", dir, soname, e);
+            return;
+        }
+    }
+    match std::os::unix::fs::symlink(libname, &link) {
+        Ok(()) => debug!("{} -> {} (changed)", soname, libname),
+        Err(e) => warn!("Can't link {}/{} to {}: {}", dir, soname, libname, e),
+    }
 }
 
-fn should_create_symlink(link_path: &Path, target_path: &Path) -> Result<bool, Error> {
-    if !link_path.exists() {
-        return Ok(true);
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use camino::Utf8PathBuf;
+    use std::os::unix::fs::symlink;
+
+    fn setup() -> (tempfile::TempDir, Utf8PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = Utf8PathBuf::try_from(tmp.path().to_path_buf()).unwrap();
+        fs::write(dir.join("libfoo.so.1.2.3"), b"x").unwrap();
+        (tmp, dir)
     }
 
-    // Check if the symlink points to the correct target
-    let current_target = fs::read_link(link_path);
-    match current_target {
-        Ok(current) => {
-            // Compare paths (canonicalize for comparison)
-            let current_canon = current.canonicalize().unwrap_or(current);
-            let target_canon = target_path
-                .canonicalize()
-                .unwrap_or_else(|_| target_path.to_path_buf());
+    fn link_target(dir: &Utf8Path, name: &str) -> Option<String> {
+        fs::read_link(dir.join(name))
+            .ok()
+            .map(|p| p.to_string_lossy().into_owned())
+    }
 
-            Ok(current_canon != target_canon)
-        }
-        Err(_) => Ok(true), // If we can't read the link, assume we need to create it
+    #[test]
+    fn creates_missing_link() {
+        let (_tmp, dir) = setup();
+        create_link(
+            Utf8Path::new("/"),
+            &dir,
+            &dir,
+            "libfoo.so.1.2.3",
+            "libfoo.so.1",
+        );
+        assert_eq!(link_target(&dir, "libfoo.so.1").unwrap(), "libfoo.so.1.2.3");
+    }
+
+    #[test]
+    fn repoints_wrong_link() {
+        let (_tmp, dir) = setup();
+        fs::write(dir.join("libfoo.so.1.0"), b"x").unwrap();
+        symlink("libfoo.so.1.0", dir.join("libfoo.so.1")).unwrap();
+        create_link(
+            Utf8Path::new("/"),
+            &dir,
+            &dir,
+            "libfoo.so.1.2.3",
+            "libfoo.so.1",
+        );
+        assert_eq!(link_target(&dir, "libfoo.so.1").unwrap(), "libfoo.so.1.2.3");
+    }
+
+    #[test]
+    fn replaces_dangling_link() {
+        let (_tmp, dir) = setup();
+        symlink("libgone.so.9", dir.join("libfoo.so.1")).unwrap();
+        create_link(
+            Utf8Path::new("/"),
+            &dir,
+            &dir,
+            "libfoo.so.1.2.3",
+            "libfoo.so.1",
+        );
+        assert_eq!(link_target(&dir, "libfoo.so.1").unwrap(), "libfoo.so.1.2.3");
+    }
+
+    #[test]
+    fn never_removes_regular_file() {
+        let (_tmp, dir) = setup();
+        fs::write(dir.join("libfoo.so.1"), b"real file").unwrap();
+        create_link(
+            Utf8Path::new("/"),
+            &dir,
+            &dir,
+            "libfoo.so.1.2.3",
+            "libfoo.so.1",
+        );
+        let md = fs::symlink_metadata(dir.join("libfoo.so.1")).unwrap();
+        assert!(md.file_type().is_file());
+        assert_eq!(fs::read(dir.join("libfoo.so.1")).unwrap(), b"real file");
+    }
+
+    #[test]
+    fn correct_link_untouched() {
+        let (_tmp, dir) = setup();
+        symlink("libfoo.so.1.2.3", dir.join("libfoo.so.1")).unwrap();
+        let before = fs::symlink_metadata(dir.join("libfoo.so.1")).unwrap().ino();
+        create_link(
+            Utf8Path::new("/"),
+            &dir,
+            &dir,
+            "libfoo.so.1.2.3",
+            "libfoo.so.1",
+        );
+        let after = fs::symlink_metadata(dir.join("libfoo.so.1")).unwrap().ino();
+        assert_eq!(before, after);
     }
 }
