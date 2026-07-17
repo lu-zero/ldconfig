@@ -1,13 +1,13 @@
-use anyhow::Error;
-/// Example: Compare two cache files
+/// Example: Compare two ld.so.cache files entry by entry.
 ///
-/// This example compares two ld.so.cache files to verify compatibility.
-/// It cross-validates with the ld-so-cache crate to ensure compatibility.
+/// Cross-validates both files with the ld-so-cache crate.
 ///
 /// Usage: cargo run --example compare_caches <our_cache> <real_cache>
+use anyhow::Error;
 use bpaf::Bpaf;
 use ld_so_cache::parsers::parse_ld_cache;
 use ldconfig::Cache;
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Bpaf)]
@@ -22,153 +22,80 @@ struct Options {
     real_cache: PathBuf,
 }
 
-fn compare_caches(our_cache: &Cache, real_cache: &Cache) -> Result<(), Error> {
-    let our_info = our_cache.info();
-    let real_info = real_cache.info();
-
-    println!("=== Cache Comparison ===");
-    println!("Our cache: {} libraries", our_info.num_entries);
-    println!("Real cache: {} libraries", real_info.num_entries);
-
-    // Check library count
-    if our_info.num_entries == real_info.num_entries {
-        println!("✅ Library count matches: {}", our_info.num_entries);
-    } else {
-        println!(
-            "❌ Library count mismatch: {} vs {}",
-            our_info.num_entries, real_info.num_entries
-        );
-    }
-
-    // Check generator
-    if our_info.generator.is_some() || real_info.generator.is_some() {
-        match (&our_info.generator, &real_info.generator) {
-            (Some(our_gen), Some(real_gen)) => {
-                println!("Our generator: {}", our_gen);
-                println!("Real generator: {}", real_gen);
-            }
-            (Some(our_gen), None) => {
-                println!("Our generator: {}", our_gen);
-                println!("Real generator: (none)");
-            }
-            (None, Some(real_gen)) => {
-                println!("Our generator: (none)");
-                println!("Real generator: {}", real_gen);
-            }
-            _ => {}
-        }
-    }
-
-    // Compare entries
-    let our_entries: Vec<_> = our_cache.entries().collect();
-    let real_entries: Vec<_> = real_cache.entries().collect();
-
-    let entries_to_compare = std::cmp::min(5, std::cmp::min(our_entries.len(), real_entries.len()));
-    println!("\nComparing first {} entries:", entries_to_compare);
-
-    for i in 0..entries_to_compare {
-        let our_entry = &our_entries[i];
-        let real_entry = &real_entries[i];
-
-        if our_entry.soname == real_entry.soname {
-            println!(
-                "✅ Entry {}: {} (flags match: {})",
-                i,
-                our_entry.soname,
-                our_entry.flags == real_entry.flags
-            );
-        } else {
-            println!(
-                "❌ Entry {} name differs: {} vs {}",
-                i, our_entry.soname, real_entry.soname
-            );
-        }
-
-        if our_entry.flags != real_entry.flags {
-            println!(
-                "   ⚠️  Flags: 0x{:04x} vs 0x{:04x}",
-                our_entry.flags, real_entry.flags
-            );
-        }
-    }
-
-    Ok(())
+fn entry_set(cache: &Cache) -> BTreeSet<(String, String, u32, u64)> {
+    cache
+        .entries()
+        .map(|e| (e.soname, e.path, e.flags, e.hwcap))
+        .collect()
 }
 
 fn main() -> Result<(), Error> {
     let options = options().run();
 
-    println!("=== Extended Cache Comparison ===");
-    println!();
+    let ours = Cache::from_file(&options.our_cache)?;
+    let real = Cache::from_file(&options.real_cache)?;
 
-    // Read both cache files using our Cache API
-    let our_cache = Cache::from_file(&options.our_cache)?;
-    let real_cache = Cache::from_file(&options.real_cache)?;
+    println!(
+        "ours: {} entries, generator {:?}",
+        ours.info().num_entries,
+        ours.info().generator
+    );
+    println!(
+        "real: {} entries, generator {:?}",
+        real.info().num_entries,
+        real.info().generator
+    );
 
-    println!("--- ldconfig-rs Analysis ---");
-    compare_caches(&our_cache, &real_cache)?;
+    let our_set = entry_set(&ours);
+    let real_set = entry_set(&real);
+    let missing: Vec<_> = real_set.difference(&our_set).collect();
+    let extra: Vec<_> = our_set.difference(&real_set).collect();
 
-    // Parse using ld-so-cache crate for cross-validation
-    let our_data = std::fs::read(&options.our_cache)?;
-    let real_data = std::fs::read(&options.real_cache)?;
-
-    println!("\n--- ld-so-cache Crate Cross-Validation ---");
-
-    match parse_ld_cache(&our_data) {
-        Ok(our_ld_cache) => {
-            println!("✅ Our cache parsed successfully with ld-so-cache");
-            if let Ok(entries) = our_ld_cache.get_entries() {
-                println!("  Libraries: {}", entries.len());
-
-                for (i, entry) in entries.iter().take(3).enumerate() {
-                    println!(
-                        "    {}. {} -> {}",
-                        i, entry.library_name, entry.library_path
-                    );
-                }
-            }
-        }
-        Err(e) => {
-            println!("❌ Our cache failed to parse with ld-so-cache: {}", e);
-        }
+    println!(
+        "missing from ours: {}, extra in ours: {}",
+        missing.len(),
+        extra.len()
+    );
+    for (soname, path, flags, hwcap) in missing.iter().take(20) {
+        println!(
+            "  missing: {} => {} (flags {:#06x}, hwcap {:#x})",
+            soname, path, flags, hwcap
+        );
+    }
+    for (soname, path, flags, hwcap) in extra.iter().take(20) {
+        println!(
+            "  extra:   {} => {} (flags {:#06x}, hwcap {:#x})",
+            soname, path, flags, hwcap
+        );
     }
 
-    match parse_ld_cache(&real_data) {
-        Ok(real_ld_cache) => {
-            println!("✅ Real cache parsed successfully with ld-so-cache");
-            if let Ok(entries) = real_ld_cache.get_entries() {
-                println!("  Libraries: {}", entries.len());
-
-                for (i, entry) in entries.iter().take(3).enumerate() {
-                    println!(
-                        "    {}. {} -> {}",
-                        i, entry.library_name, entry.library_path
-                    );
-                }
-            }
-        }
-        Err(e) => {
-            println!("❌ Real cache failed to parse with ld-so-cache: {}", e);
-        }
-    }
-
-    // Cross-validate entry counts
-    if let (Ok(our_ld_cache), Ok(real_ld_cache)) =
-        (parse_ld_cache(&our_data), parse_ld_cache(&real_data))
+    // Order comparison: first divergence in the sorted entry list.
+    let ours_ordered: Vec<_> = ours.entries().map(|e| (e.soname, e.path)).collect();
+    let real_ordered: Vec<_> = real.entries().map(|e| (e.soname, e.path)).collect();
+    match ours_ordered
+        .iter()
+        .zip(real_ordered.iter())
+        .position(|(a, b)| a != b)
     {
-        if let (Ok(our_entries), Ok(real_entries)) =
-            (our_ld_cache.get_entries(), real_ld_cache.get_entries())
-        {
-            println!("\n--- Entry Count Validation ---");
-            if our_entries.len() == real_entries.len() {
-                println!("✅ ld-so-cache library counts match: {}", our_entries.len());
-            } else {
-                println!(
-                    "❌ ld-so-cache library counts differ: {} vs {}",
-                    our_entries.len(),
-                    real_entries.len()
-                );
+        Some(i) => println!(
+            "first order divergence at {}: ours {:?} vs real {:?}",
+            i, ours_ordered[i], real_ordered[i]
+        ),
+        None if ours_ordered.len() == real_ordered.len() => {
+            println!("entry order identical");
+        }
+        None => println!("entry lists are a prefix of each other"),
+    }
+
+    // Cross-validation with the ld-so-cache crate.
+    for (label, path) in [("ours", &options.our_cache), ("real", &options.real_cache)] {
+        let data = std::fs::read(path)?;
+        match parse_ld_cache(&data) {
+            Ok(cache) => {
+                let n = cache.get_entries().map(|e| e.len()).unwrap_or(0);
+                println!("ld-so-cache parses {}: {} entries", label, n);
             }
+            Err(e) => println!("ld-so-cache fails to parse {}: {}", label, e),
         }
     }
 
