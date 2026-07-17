@@ -12,16 +12,26 @@ This library provides both a command-line tool and a high-level API for:
 
 This implementation supports the following architectures with proper glibc cache flags:
 
-- **x86-64** (64-bit Intel/AMD) - `FLAG_X8664_LIB64`
-- **AArch64** (ARM 64-bit) - `FLAG_AARCH64_LIB64`
-- **RISC-V 64-bit** (lp64d ABI with double-precision FP) - `FLAG_RISCV_FLOAT_ABI_DOUBLE`
-- **PowerPC 64-bit** - `FLAG_POWERPC_LIB64`
-- **i686** (32-bit x86) - Base ELF flag
-- **ARM** (32-bit) - `FLAG_ARM_LIBHF` for hard-float, base flag for soft-float
+- **x86-64** - `FLAG_X8664_LIB64`; x32 as `FLAG_X8664_LIBX32`
+- **x86** (i386 through i686, all `EM_386` objects) - base ELF flag
+- **AArch64** - `FLAG_AARCH64_LIB64`
+- **ARM** (EABI v5) - `FLAG_ARM_LIBHF` / `FLAG_ARM_LIBSF` from the float ABI in `e_flags`
+- **RISC-V** (RV32/RV64) - `FLAG_RISCV_FLOAT_ABI_SOFT` / `FLAG_RISCV_FLOAT_ABI_DOUBLE` from `e_flags`
+- **PowerPC** - `FLAG_POWERPC_LIB64` for 64-bit, base flag for 32-bit
 
 All architecture flags match the official [glibc ldconfig implementation](https://sourceware.org/git/?p=glibc.git;a=blob;f=sysdeps/generic/ldconfig.h).
 
+`glibc-hwcaps` subdirectories are scanned and written as cache extension
+entries (including the x86-64 ISA level from `GNU_PROPERTY_X86_ISA_1_NEEDED`),
+matching glibc 2.33+.
+
 ## Command-Line Usage
+
+Options follow glibc ldconfig: `-p` print, `-N` no cache rebuild, `-X` no
+symlink updates, `-n` only command-line directories, `-r` alternate root,
+`-C` cache file, `-f` config file, `-v` verbose, plus additional directories
+as positional arguments. `-l`, `-i`, `-c` and the aux-cache are not
+implemented; only the new cache format is written.
 
 ### Print cache contents
 
@@ -140,7 +150,15 @@ impl SearchPaths {
 
 ## Testing
 
-The library includes comprehensive testing through examples since it is fairly cumbersome to automate.
+Unit tests cover config parsing, symlink handling, sorting, and the binary
+format; run them with `cargo test`. End-to-end validation compares output
+against a real glibc ldconfig:
+
+```bash
+cargo run --bin ldconfig -- -X -C test.cache
+cargo run --example compare_caches -- test.cache /etc/ld.so.cache
+diff <(cargo run --bin ldconfig -- -p -C /etc/ld.so.cache) <(/sbin/ldconfig -p)
+```
 
 You may download any minimal docker image sporting glibc or use [chroot-stages](https://github.com/lu-zero/crossdev-stages/blob/master/chroot-stage.sh) to download
 a Gentoo stage3
