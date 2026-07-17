@@ -1,207 +1,265 @@
-use camino::Utf8PathBuf;
-use goblin::elf::header::ET_DYN;
-use goblin::elf::Elf;
+//! ELF inspection mirroring glibc's readelflib.c.
+//!
+//! Like glibc, only the ELF header and program headers are examined;
+//! section headers may be stripped or damaged without affecting the scan.
+
+use goblin::container::{Container, Ctx};
+use goblin::elf::dynamic::{Dynamic, DT_SONAME};
+use goblin::elf::header::{
+    Header, EI_DATA, ELFDATA2LSB, ELFDATA2MSB, EM_386, EM_AARCH64, EM_ARM, EM_PPC, EM_PPC64,
+    EM_RISCV, EM_X86_64, ET_DYN,
+};
+use goblin::elf::program_header::{ProgramHeader, PT_DYNAMIC, PT_LOAD};
 use memmap2::Mmap;
 use std::fs::File;
 use std::path::Path;
-use tracing::{debug, warn};
+use tracing::debug;
 
-/// Local error type for ELF parsing failures
-/// These errors are never surfaced to users - files are just skipped during scanning
-#[derive(Debug)]
-pub(crate) enum ParseError {
-    Io,
-    Goblin,
-    NotSharedObject,
-    MissingDynamicSegment,
-    MissingSoname,
-    EmptySoname,
-    UnsupportedArchitecture,
-}
+use crate::cache_format::{
+    FLAG_AARCH64_LIB64, FLAG_ARM_LIBHF, FLAG_ARM_LIBSF, FLAG_ELF_LIBC6, FLAG_POWERPC_LIB64,
+    FLAG_RISCV_FLOAT_ABI_DOUBLE, FLAG_RISCV_FLOAT_ABI_SOFT, FLAG_X8664_LIB64, FLAG_X8664_LIBX32,
+};
 
-impl From<std::io::Error> for ParseError {
-    fn from(_: std::io::Error) -> Self {
-        ParseError::Io
-    }
-}
+const PT_GNU_PROPERTY: u32 = 0x6474_e553;
+const NT_GNU_PROPERTY_TYPE_0: u32 = 5;
+const GNU_PROPERTY_X86_ISA_1_NEEDED: u32 = 0xc000_8002;
 
-impl From<goblin::error::Error> for ParseError {
-    fn from(_: goblin::error::Error) -> Self {
-        ParseError::Goblin
-    }
-}
+const EF_ARM_EABIMASK: u32 = 0xff00_0000;
+const EF_ARM_EABI_VER5: u32 = 0x0500_0000;
+const EF_ARM_ABI_FLOAT_SOFT: u32 = 0x200;
+const EF_ARM_ABI_FLOAT_HARD: u32 = 0x400;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ElfArch {
-    X86_64,
-    AArch64,
-    RiscV64,
-    PowerPC64,
-    I686,
-    ARM,
-}
+const EF_RISCV_RVC: u32 = 0x0001;
+const EF_RISCV_FLOAT_ABI: u32 = 0x0006;
+const EF_RISCV_FLOAT_ABI_SOFT: u32 = 0x0000;
+const EF_RISCV_FLOAT_ABI_DOUBLE: u32 = 0x0004;
 
 #[derive(Debug, Clone)]
-pub struct ElfLibrary {
-    pub soname: String,
-    pub path: Utf8PathBuf,
-    pub is_64bit: bool,
-    pub arch: ElfArch,
-    pub is_hardfloat: bool,
-    pub osversion: u32,
-    pub hwcap: Option<u64>,
+pub(crate) struct ElfInfo {
+    /// DT_SONAME if present; callers fall back to the file name,
+    /// like glibc's implicit_soname.
+    pub soname: Option<String>,
+    pub flags: u32,
+    /// x86 ISA level from GNU_PROPERTY_X86_ISA_1_NEEDED, 0 if unmarked.
+    pub isa_level: u32,
 }
 
-impl ElfLibrary {
-    /// Get the filename for sorting purposes
-    fn sort_key_filename(&self) -> &str {
-        self.path.file_name().unwrap_or(self.path.as_str())
-    }
-
-    /// Get the hwcap for sorting purposes
-    fn sort_key_hwcap(&self) -> u64 {
-        self.hwcap.unwrap_or(0)
-    }
-}
-
-impl PartialEq for ElfLibrary {
-    fn eq(&self, other: &Self) -> bool {
-        self.sort_key_filename() == other.sort_key_filename()
-            && self.sort_key_hwcap() == other.sort_key_hwcap()
-    }
-}
-
-impl Eq for ElfLibrary {}
-
-impl PartialOrd for ElfLibrary {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for ElfLibrary {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // Primary: reverse filename order using glibc's dl_cache_libcmp
-        // Secondary: hwcap descending (higher first)
-        use crate::cache_format::dl_cache_libcmp;
-
-        let filename_a = self.sort_key_filename();
-        let filename_b = other.sort_key_filename();
-
-        match dl_cache_libcmp(filename_b, filename_a) {
-            std::cmp::Ordering::Equal => other.sort_key_hwcap().cmp(&self.sort_key_hwcap()),
-            ordering => ordering,
-        }
-    }
-}
-
-pub fn parse_elf_file(path: &Path) -> Option<ElfLibrary> {
+/// Inspect a shared object like glibc's process_elf_file.
+/// Returns None for anything that must not be cached.
+pub(crate) fn inspect(path: &Path) -> Option<ElfInfo> {
     let file = File::open(path).ok()?;
-    let mmap = unsafe { Mmap::map(&file).ok()? };
-    let elf = Elf::parse(&mmap).ok()?;
+    // Safety: read-only shared mapping; a concurrent truncation can raise
+    // SIGBUS, the same exposure glibc's ldconfig has when mmapping.
+    let map = unsafe { Mmap::map(&file).ok()? };
+    inspect_bytes(&map, path)
+}
 
-    validate_elf(&elf, path).ok()?;
-    let soname = extract_soname(&elf, path).ok()?;
-    let arch = detect_architecture(&elf).ok()?;
-    let is_hardfloat = detect_hardfloat(&elf);
+fn inspect_bytes(data: &[u8], path: &Path) -> Option<ElfInfo> {
+    let header = goblin::elf::Elf::parse_header(data).ok()?;
 
-    // Convert Path to Utf8PathBuf
-    let utf8_path = Utf8PathBuf::try_from(path.to_path_buf()).ok()?;
+    let native = if cfg!(target_endian = "little") {
+        ELFDATA2LSB
+    } else {
+        ELFDATA2MSB
+    };
+    if header.e_ident[EI_DATA] != native {
+        debug!("{}: foreign byte order", path.display());
+        return None;
+    }
+    if header.e_type != ET_DYN {
+        debug!("{}: not a shared object", path.display());
+        return None;
+    }
 
-    Some(ElfLibrary {
+    let is_64 = header.container().ok()? == Container::Big;
+    let Some(flags) = machine_flags(&header, is_64) else {
+        debug!(
+            "{}: unsupported machine/ABI (e_machine {}, e_flags {:#x})",
+            path.display(),
+            header.e_machine,
+            header.e_flags
+        );
+        return None;
+    };
+
+    let ctx = Ctx::new(header.container().ok()?, header.endianness().ok()?);
+    let phdrs =
+        ProgramHeader::parse(data, header.e_phoff as usize, header.e_phnum as usize, ctx).ok()?;
+    if !phdrs.iter().any(|ph| ph.p_type == PT_DYNAMIC) {
+        debug!("{}: missing PT_DYNAMIC", path.display());
+        return None;
+    }
+
+    let soname = read_soname(data, &phdrs, ctx);
+    let isa_level = if matches!(header.e_machine, EM_386 | EM_X86_64) {
+        read_isa_level(data, &phdrs, is_64)
+    } else {
+        0
+    };
+
+    Some(ElfInfo {
         soname,
-        path: utf8_path,
-        is_64bit: elf.is_64,
-        arch,
-        is_hardfloat,
-        osversion: extract_osversion(&elf),
-        hwcap: None,
+        flags,
+        isa_level,
     })
 }
 
-fn validate_elf(elf: &Elf, path: &Path) -> Result<(), ParseError> {
-    // Must be a shared object (ET_DYN)
-    if elf.header.e_type != ET_DYN {
-        debug!("Skipping {}: not a shared object (ET_DYN)", path.display());
-        return Err(ParseError::NotSharedObject);
+/// Per-machine cache flags, following the sysdeps readelflib.c variants.
+fn machine_flags(h: &Header, is_64: bool) -> Option<u32> {
+    match (h.e_machine, is_64) {
+        (EM_X86_64, true) => Some(FLAG_X8664_LIB64 | FLAG_ELF_LIBC6),
+        (EM_X86_64, false) => Some(FLAG_X8664_LIBX32 | FLAG_ELF_LIBC6),
+        // Every ix86 object (i386 through i686) carries EM_386.
+        (EM_386, false) => Some(FLAG_ELF_LIBC6),
+        (EM_AARCH64, true) => Some(FLAG_AARCH64_LIB64 | FLAG_ELF_LIBC6),
+        (EM_ARM, false) => {
+            if h.e_flags & EF_ARM_EABIMASK == EF_ARM_EABI_VER5 {
+                if h.e_flags & EF_ARM_ABI_FLOAT_HARD != 0 {
+                    Some(FLAG_ARM_LIBHF | FLAG_ELF_LIBC6)
+                } else if h.e_flags & EF_ARM_ABI_FLOAT_SOFT != 0 {
+                    Some(FLAG_ARM_LIBSF | FLAG_ELF_LIBC6)
+                } else {
+                    // Unmarked objects are compatible with all ABI variants.
+                    Some(FLAG_ELF_LIBC6)
+                }
+            } else {
+                Some(FLAG_ELF_LIBC6)
+            }
+        }
+        (EM_PPC64, true) => Some(FLAG_POWERPC_LIB64 | FLAG_ELF_LIBC6),
+        (EM_PPC, false) => Some(FLAG_ELF_LIBC6),
+        (EM_RISCV, _) => {
+            // glibc rejects anything beyond the float ABI and RVC bits.
+            if h.e_flags & !(EF_RISCV_FLOAT_ABI | EF_RISCV_RVC) != 0 {
+                return None;
+            }
+            match h.e_flags & EF_RISCV_FLOAT_ABI {
+                EF_RISCV_FLOAT_ABI_SOFT => Some(FLAG_RISCV_FLOAT_ABI_SOFT | FLAG_ELF_LIBC6),
+                EF_RISCV_FLOAT_ABI_DOUBLE => Some(FLAG_RISCV_FLOAT_ABI_DOUBLE | FLAG_ELF_LIBC6),
+                _ => None,
+            }
+        }
+        _ => None,
     }
+}
 
-    // Must have PT_DYNAMIC segment
-    if elf
-        .program_headers
+fn read_soname(data: &[u8], phdrs: &[ProgramHeader], ctx: Ctx) -> Option<String> {
+    let dynamic = Dynamic::parse(data, phdrs, ctx).ok()??;
+    // First DT_SONAME wins, as in glibc.
+    let idx = dynamic.dyns.iter().find(|d| d.d_tag == DT_SONAME)?.d_val as usize;
+
+    let off = vaddr_to_offset(phdrs, dynamic.info.strtab as u64)? as usize;
+    let end = off.checked_add(dynamic.info.strsz)?.min(data.len());
+    let table = data.get(off..end)?;
+    let bytes = table.get(idx..)?;
+    let nul = bytes.iter().position(|&b| b == 0)?;
+    let soname = std::str::from_utf8(&bytes[..nul]).ok()?;
+    (!soname.is_empty()).then(|| soname.to_owned())
+}
+
+fn vaddr_to_offset(phdrs: &[ProgramHeader], vaddr: u64) -> Option<u64> {
+    phdrs
         .iter()
-        .all(|ph| ph.p_type != goblin::elf::program_header::PT_DYNAMIC)
-    {
-        debug!("Skipping {}: missing PT_DYNAMIC segment", path.display());
-        return Err(ParseError::MissingDynamicSegment);
-    }
-
-    Ok(())
+        .find(|ph| ph.p_type == PT_LOAD && vaddr >= ph.p_vaddr && vaddr - ph.p_vaddr < ph.p_filesz)
+        .map(|ph| vaddr - ph.p_vaddr + ph.p_offset)
 }
 
-fn extract_soname(elf: &Elf, path: &Path) -> Result<String, ParseError> {
-    let soname_index = match &elf.dynamic {
-        Some(dynamic) => dynamic.info.soname,
-        None => {
-            debug!("Skipping {}: missing SONAME", path.display());
-            return Err(ParseError::MissingSoname);
+/// x86 ISA level from the NT_GNU_PROPERTY_TYPE_0 note
+/// (GNU_PROPERTY_X86_ISA_1_NEEDED), following elf/readelflib.c and
+/// sysdeps/unix/sysv/linux/x86/elf-read-prop.h.
+fn read_isa_level(data: &[u8], phdrs: &[ProgramHeader], is_64: bool) -> u32 {
+    let align = if is_64 { 8usize } else { 4 };
+    let u32_at = |seg: &[u8], pos: usize| u32::from_ne_bytes(seg[pos..pos + 4].try_into().unwrap());
+    let align_up = |v: usize, a: usize| v.div_ceil(a) * a;
+
+    for ph in phdrs {
+        if ph.p_type != PT_GNU_PROPERTY || ph.p_align as usize != align {
+            continue;
         }
-    };
+        let Some(seg) = (ph.p_offset as usize)
+            .checked_add(ph.p_filesz as usize)
+            .and_then(|end| data.get(ph.p_offset as usize..end))
+        else {
+            continue;
+        };
 
-    let soname_str = match elf.dynstrtab.get_at(soname_index) {
-        Some(s) => s,
-        None => {
-            debug!("Skipping {}: invalid SONAME index", path.display());
-            return Err(ParseError::MissingSoname);
+        let mut pos = 0usize;
+        while pos + 12 <= seg.len() {
+            let namesz = u32_at(seg, pos) as usize;
+            let descsz = u32_at(seg, pos + 4) as usize;
+            let n_type = u32_at(seg, pos + 8);
+            let name_off = pos + 12;
+            let desc_off = name_off.saturating_add(align_up(namesz, 4));
+
+            if n_type == NT_GNU_PROPERTY_TYPE_0
+                && namesz == 4
+                && seg.get(name_off..name_off + 4) == Some(b"GNU\0")
+            {
+                if descsz < 8 || !descsz.is_multiple_of(align) {
+                    return 0;
+                }
+                let Some(desc_end) = desc_off.checked_add(descsz).filter(|&e| e <= seg.len())
+                else {
+                    return 0;
+                };
+
+                let mut p = desc_off;
+                let mut last_type = 0u32;
+                while desc_end - p >= 8 {
+                    let p_type = u32_at(seg, p);
+                    let datasz = u32_at(seg, p + 4) as usize;
+                    // Property types must be ascending; ours is the largest
+                    // interesting one, so anything past it ends the search.
+                    if p_type < last_type || p_type > GNU_PROPERTY_X86_ISA_1_NEEDED {
+                        return 0;
+                    }
+                    let dstart = p + 8;
+                    if dstart + datasz > desc_end {
+                        return 0;
+                    }
+                    if p_type == GNU_PROPERTY_X86_ISA_1_NEEDED {
+                        if datasz == 4 {
+                            let needed = u32_at(seg, dstart);
+                            if needed != 0 {
+                                return 31 - needed.leading_zeros();
+                            }
+                        }
+                        return 0;
+                    }
+                    last_type = p_type;
+                    p = dstart + align_up(datasz, align);
+                }
+                return 0;
+            }
+            pos = desc_off.saturating_add(align_up(descsz, align));
         }
-    };
-
-    if soname_str.is_empty() {
-        debug!("Skipping {}: empty SONAME", path.display());
-        return Err(ParseError::EmptySoname);
     }
-
-    Ok(soname_str.to_string())
-}
-
-fn detect_architecture(elf: &Elf) -> Result<ElfArch, ParseError> {
-    use goblin::elf::header::*;
-    match elf.header.e_machine {
-        EM_X86_64 => Ok(ElfArch::X86_64),
-        EM_AARCH64 => Ok(ElfArch::AArch64),
-        EM_RISCV => Ok(ElfArch::RiscV64),
-        EM_PPC64 => Ok(ElfArch::PowerPC64),
-        EM_386 => Ok(ElfArch::I686),
-        EM_ARM => Ok(ElfArch::ARM),
-        _ => {
-            // Use goblin's machine_to_str for better error messages
-            let machine_str = machine_to_str(elf.header.e_machine);
-            warn!(
-                "Unsupported architecture: {} (0x{:x})",
-                machine_str, elf.header.e_machine
-            );
-            Err(ParseError::UnsupportedArchitecture)
-        }
-    }
-}
-
-fn detect_hardfloat(elf: &Elf) -> bool {
-    // Check ELF flags for hard-float ABI (EF_ARM_ABI_FLOAT_HARD)
-    if elf.header.e_machine == goblin::elf::header::EM_ARM {
-        (elf.header.e_flags & 0x400) != 0
-    } else {
-        false
-    }
-}
-
-fn extract_osversion(_elf: &Elf) -> u32 {
-    // Search for PT_NOTE segment with NT_GNU_ABI_TAG
-    // Note format: namesz (4), descsz (4), type (4), name, desc
-    // ABI tag desc: OS (4), major (4), minor (4), patch (4)
-    // Returns: (major << 24) | (minor << 16) | patch
-
-    // For now, return 0 (no version requirement)
-    // Full implementation requires parsing note section binary data
-    // from program header PT_NOTE segments
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cache_format::{FLAG_ELF_LIBC6, FLAG_X8664_LIB64};
+    use std::path::Path;
+
+    #[test]
+    fn inspect_system_libz() {
+        // Only meaningful on an x86-64 host with the usual layout.
+        if !cfg!(target_arch = "x86_64") {
+            return;
+        }
+        let path = Path::new("/usr/lib/libz.so.1");
+        if !path.exists() {
+            return;
+        }
+        let info = inspect(path).unwrap();
+        assert_eq!(info.soname.as_deref(), Some("libz.so.1"));
+        assert_eq!(info.flags, FLAG_X8664_LIB64 | FLAG_ELF_LIBC6);
+    }
+
+    #[test]
+    fn inspect_rejects_non_elf() {
+        assert!(inspect(Path::new("/etc/ld.so.conf")).is_none());
+    }
 }

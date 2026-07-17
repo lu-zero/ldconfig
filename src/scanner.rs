@@ -1,166 +1,241 @@
-use crate::elf::{parse_elf_file, ElfLibrary};
-use crate::error::Error;
-use crate::hwcap::detect_hwcap_dirs;
-use camino::Utf8PathBuf;
-use std::collections::HashSet;
-use std::path::Path;
+//! Directory scanning, mirroring glibc's search_dir and directory setup.
 
-/// Check if a filename looks like a DSO (Dynamic Shared Object)
-/// Matches glibc's _dl_is_dso() logic from elf/dl-is_dso.h
-pub fn is_dso(name: &str) -> bool {
-    // Pattern 1: lib*.so* or ld-*.so*
-    let has_lib_or_ld_prefix = name.starts_with("lib") || name.starts_with("ld-");
-    let has_so = name.contains(".so");
+use crate::chroot::chroot_canon;
+use crate::elf;
+use camino::{Utf8Path, Utf8PathBuf};
+use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::os::unix::fs::MetadataExt;
+use tracing::{debug, warn};
 
-    // Pattern 2: ld.so.*
-    let is_ld_so = name.starts_with("ld.so.");
-
-    // Pattern 3: ld64.so.*
-    let is_ld64_so = name.starts_with("ld64.so.");
-
-    (has_lib_or_ld_prefix && has_so) || is_ld_so || is_ld64_so
+/// A directory to scan: the configured path (used as cache entry text)
+/// plus its on-disk location under the -r prefix.
+#[derive(Debug, Clone)]
+pub(crate) struct ScanDir {
+    pub path: Utf8PathBuf,
+    pub real: Utf8PathBuf,
+    /// glibc-hwcaps subdirectory name, if this is one.
+    pub hwcaps: Option<String>,
 }
 
-/// Check if a path should be scanned as a library
-pub fn should_scan_library(path: &Path) -> bool {
-    if let Some(filename) = path.file_name() {
-        if let Some(name) = filename.to_str() {
-            return is_dso(name);
-        }
-    }
-    false
+/// One library chosen for a directory: `name` is the file name on disk,
+/// `soname` the cache key.
+#[derive(Debug, Clone)]
+pub(crate) struct DirLib {
+    pub name: String,
+    pub soname: String,
+    pub flags: u32,
+    pub isa_level: u32,
+    pub is_link: bool,
 }
 
-/// Check if a symlink should be included in the cache
-pub fn should_include_symlink(filename: &str, soname: &str, path: &Utf8PathBuf) -> bool {
-    if filename.ends_with(".so") && !filename.contains(".so.") {
-        // Bare .so symlink: include if target has same base name + .so.VERSION pattern
-        if let Ok(target) = std::fs::read_link(path.as_std_path()) {
-            let target_name = target.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            let base = filename.trim_end_matches(".so");
-            // Include if target is like libfoo.so.X (standard pattern)
-            // Exclude if target is like libfoo-X.so (dash-version) or libbar.so (different base)
-            target_name.starts_with(&format!("{}.", base)) && target_name.contains(".so.")
-        } else {
-            false
-        }
+/// Matches glibc's _dl_is_dso() from elf/dl-is_dso.h.
+pub(crate) fn is_dso(name: &str) -> bool {
+    ((name.starts_with("lib") || name.starts_with("ld-")) && name.contains(".so"))
+        || name.starts_with("ld.so.")
+        || name.starts_with("ld64.so.")
+}
+
+/// Temporary files from prelink, RPM, and dpkg; glibc's
+/// skip_dso_based_on_name.
+fn is_temp_dso(name: &str) -> bool {
+    name.ends_with(".#prelink#")
+        || name.contains(".#prelink#.")
+        || name.contains(';')
+        || name.ends_with(".dpkg-new")
+        || name.ends_with(".dpkg-tmp")
+}
+
+fn resolve(prefix: &Utf8Path, path: &Utf8Path) -> Option<Utf8PathBuf> {
+    if prefix == "/" {
+        Some(path.to_path_buf())
     } else {
-        // Versioned symlink (.so.X): include only if filename matches SONAME
-        filename == soname
+        chroot_canon(prefix, path)
     }
 }
 
-/// Scan all libraries in the given directories, separating real files from symlinks
-/// Returns (real_files, symlinks)
-pub fn scan_all_libraries(
-    dirs: &[Utf8PathBuf],
-) -> Result<(Vec<ElfLibrary>, Vec<ElfLibrary>), Error> {
-    let mut real_files = Vec::new();
-    let mut symlinks = Vec::new();
+/// Build the scan list: strip trailing slashes, drop nonexistent
+/// directories, deduplicate by (dev, ino) keeping the first configured
+/// path text, and queue glibc-hwcaps subdirectories after their parent.
+pub(crate) fn collect_dirs(dirs: &[Utf8PathBuf], prefix: &Utf8Path) -> Vec<ScanDir> {
+    let mut seen: HashSet<(u64, u64)> = HashSet::new();
+    let mut out = Vec::new();
 
     for dir in dirs {
-        if !dir.exists() {
+        let trimmed = dir.as_str().trim_end_matches('/');
+        if trimmed.is_empty() {
+            continue;
+        }
+        let logical = Utf8PathBuf::from(trimmed);
+        let Some(real) = resolve(prefix, &logical) else {
+            debug!("Can't stat {}", logical);
+            continue;
+        };
+        let Ok(md) = fs::metadata(&real) else {
+            debug!("Can't stat {}", logical);
+            continue;
+        };
+        if !md.is_dir() {
+            continue;
+        }
+        if !seen.insert((md.dev(), md.ino())) {
+            debug!("Path `{}' given more than once", logical);
+            continue;
+        }
+        out.push(ScanDir {
+            path: logical.clone(),
+            real: real.clone(),
+            hwcaps: None,
+        });
+
+        // glibc-hwcaps subdirectories (add_glibc_hwcaps_subdirectories):
+        // every directory under <dir>/glibc-hwcaps, no name whitelist.
+        let hw = real.join("glibc-hwcaps");
+        let Ok(rd) = fs::read_dir(&hw) else { continue };
+        let mut subs: Vec<String> = Vec::new();
+        for entry in rd.flatten() {
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            // Names with ':' cannot be looked up by the dynamic loader.
+            if name.starts_with('.') || name.contains(':') {
+                continue;
+            }
+            let Ok(md) = fs::metadata(entry.path()) else {
+                continue;
+            };
+            if !md.is_dir() || !seen.insert((md.dev(), md.ino())) {
+                continue;
+            }
+            subs.push(name);
+        }
+        subs.sort();
+        for name in subs {
+            out.push(ScanDir {
+                path: logical.join("glibc-hwcaps").join(&name),
+                real: hw.join(&name),
+                hwcaps: Some(name),
+            });
+        }
+    }
+    out
+}
+
+/// glibc's per-soname resolution inside one directory: prefer a real file
+/// over a symlink, otherwise the higher name per _dl_cache_libcmp. The
+/// first entry's flags are kept (glibc quirk), with a warning on mismatch.
+fn merge_candidate(dlibs: &mut HashMap<String, DirLib>, cand: DirLib, dir: &Utf8Path) {
+    use crate::cache_format::dl_cache_libcmp;
+
+    match dlibs.get_mut(&cand.soname) {
+        None => {
+            dlibs.insert(cand.soname.clone(), cand);
+        }
+        Some(existing) => {
+            if (!cand.is_link && existing.is_link)
+                || (cand.is_link == existing.is_link
+                    && dl_cache_libcmp(&existing.name, &cand.name) == Ordering::Less)
+            {
+                if existing.flags != cand.flags {
+                    warn!(
+                        "libraries {} and {} in directory {} have same soname but different type.",
+                        existing.name, cand.name, dir
+                    );
+                }
+                existing.name = cand.name;
+                existing.is_link = cand.is_link;
+                existing.isa_level = cand.isa_level;
+            }
+        }
+    }
+}
+
+/// Scan one directory, returning the winning library per soname.
+/// `remove_stale_links` removes dangling *.so.* symlinks like glibc does
+/// when link updating is enabled.
+pub(crate) fn scan_dir(sd: &ScanDir, prefix: &Utf8Path, remove_stale_links: bool) -> Vec<DirLib> {
+    let Ok(rd) = fs::read_dir(&sd.real) else {
+        debug!("Can't open directory {}", sd.path);
+        return Vec::new();
+    };
+
+    let mut dlibs: HashMap<String, DirLib> = HashMap::new();
+    for entry in rd.flatten() {
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let Ok(ft) = entry.file_type() else { continue };
+        let is_link = ft.is_symlink();
+
+        // In glibc-hwcaps directories the DSO name filter only applies to
+        // regular files (search_dir).
+        if !is_dso(&name) && (!is_link || sd.hwcaps.is_none()) {
+            continue;
+        }
+        if is_temp_dso(&name) {
             continue;
         }
 
-        // Scan base directory
-        for entry in std::fs::read_dir(dir)? {
-            let entry = entry?;
-            let path = entry.path();
-
-            if path.is_file() && should_scan_library(&path) {
-                if let Some(lib) = parse_elf_file(&path) {
-                    let is_symlink = std::fs::symlink_metadata(&path)
-                        .map(|m| m.file_type().is_symlink())
-                        .unwrap_or(false);
-
-                    if is_symlink {
-                        symlinks.push(lib);
-                    } else {
-                        real_files.push(lib);
+        let full = sd.real.join(&name);
+        if is_link {
+            let target = match resolve(prefix, &sd.path.join(&name)) {
+                Some(t) => t,
+                None => full.clone(),
+            };
+            match fs::metadata(&target) {
+                Ok(md) if md.is_file() => {}
+                Ok(_) => continue,
+                Err(_) => {
+                    // Remove stale symlinks.
+                    if remove_stale_links && name.contains(".so.") {
+                        let _ = fs::remove_file(&full);
                     }
+                    continue;
                 }
             }
+        } else if !ft.is_file() {
+            continue;
         }
 
-        // Scan hwcap subdirectories
-        let hwcap_dirs = detect_hwcap_dirs(dir.as_std_path())?;
-        for (hwcap_path, hwcap) in hwcap_dirs {
-            for entry in std::fs::read_dir(&hwcap_path)? {
-                let entry = entry?;
-                let path = entry.path();
-
-                if path.is_file() && should_scan_library(&path) {
-                    if let Some(mut lib) = parse_elf_file(&path) {
-                        let is_symlink = std::fs::symlink_metadata(&path)
-                            .map(|m| m.file_type().is_symlink())
-                            .unwrap_or(false);
-
-                        // Set hwcap value for this library
-                        let arch = lib.arch;
-                        lib.hwcap = Some(hwcap.to_bitmask(arch));
-
-                        if is_symlink {
-                            symlinks.push(lib);
-                        } else {
-                            real_files.push(lib);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Ok((real_files, symlinks))
-}
-
-/// Deduplicate libraries by (directory, filename) pair, preserving order
-pub fn deduplicate_libraries(libraries: &[ElfLibrary]) -> Vec<ElfLibrary> {
-    let mut seen = HashSet::new();
-    let mut result = Vec::new();
-
-    for lib in libraries {
-        let dir = lib.path.parent().unwrap_or_else(|| "".as_ref()).to_owned();
-        let filename = lib
-            .path
-            .file_name()
-            .unwrap_or(lib.path.as_str())
-            .to_string();
-
-        if seen.insert((dir, filename)) {
-            result.push(lib.clone());
-        }
-    }
-
-    result
-}
-
-/// Deduplicate scan directories by removing directories that are symlinks
-/// to canonical paths already in the list. Keep the CANONICAL path, not the symlink.
-/// Preserves first-occurrence order.
-pub fn deduplicate_scan_directories(dirs: &[Utf8PathBuf]) -> Vec<Utf8PathBuf> {
-    let mut seen = HashSet::new();
-    let mut result = Vec::new();
-
-    for dir in dirs {
-        let canonical = if let Ok(canon) = dir.as_std_path().canonicalize() {
-            Utf8PathBuf::try_from(canon).unwrap_or_else(|_| dir.clone())
-        } else {
-            dir.clone()
+        let Some(info) = elf::inspect(full.as_std_path()) else {
+            continue;
         };
-
-        if seen.insert(canonical.clone()) {
-            result.push(canonical);
+        let mut soname = info.soname.unwrap_or_else(|| name.clone());
+        let mut is_link = is_link;
+        if is_link && name != soname {
+            // Only the dev-symlink form (libfoo.so being a prefix of the
+            // soname) keeps link status; anything else is treated as a
+            // normal file (search_dir comment on link hygiene).
+            if !(name.ends_with(".so") && soname.starts_with(name.as_str())) {
+                is_link = false;
+            }
         }
+        if is_link {
+            soname = name.clone();
+        }
+
+        merge_candidate(
+            &mut dlibs,
+            DirLib {
+                name,
+                soname,
+                flags: info.flags,
+                isa_level: info.isa_level,
+                is_link,
+            },
+            &sd.path,
+        );
     }
 
-    result
+    let mut libs: Vec<DirLib> = dlibs.into_values().collect();
+    libs.sort_by(|a, b| a.soname.cmp(&b.soname));
+    libs
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::elf::{ElfArch, ElfLibrary};
 
     #[test]
     fn is_dso_standard_libs() {
@@ -180,40 +255,48 @@ mod tests {
         assert!(!is_dso("foo.so")); // no lib/ld prefix
     }
 
-    fn make_lib(path: &str) -> ElfLibrary {
-        ElfLibrary {
-            soname: "libtest.so.1".into(),
-            path: Utf8PathBuf::from(path),
-            is_64bit: true,
-            arch: ElfArch::X86_64,
-            is_hardfloat: false,
-            osversion: 0,
-            hwcap: None,
+    #[test]
+    fn temp_files_skipped() {
+        assert!(is_temp_dso("libfoo.so.1.#prelink#"));
+        assert!(is_temp_dso("libfoo.so.1.#prelink#.ab12cd"));
+        assert!(is_temp_dso("libfoo.so.1;5f3a"));
+        assert!(is_temp_dso("libfoo.so.1.dpkg-new"));
+        assert!(!is_temp_dso("libfoo.so.1"));
+    }
+
+    fn lib(name: &str, soname: &str, is_link: bool) -> DirLib {
+        DirLib {
+            name: name.into(),
+            soname: soname.into(),
+            flags: 0x0303,
+            isa_level: 0,
+            is_link,
         }
     }
 
     #[test]
-    fn dedup_preserves_order() {
-        let libs = vec![
-            make_lib("/usr/lib/libfoo.so.1"),
-            make_lib("/usr/lib/libbar.so.1"),
-            make_lib("/usr/lib/libfoo.so.1"), // duplicate
-            make_lib("/usr/lib/libbaz.so.1"),
-        ];
+    fn file_beats_link_for_same_soname() {
+        let dir = Utf8Path::new("/usr/lib");
+        let mut m = HashMap::new();
+        merge_candidate(&mut m, lib("libfoo.so.1", "libfoo.so.1", true), dir);
+        merge_candidate(&mut m, lib("libfoo.so.1.2.3", "libfoo.so.1", false), dir);
+        let winner = &m["libfoo.so.1"];
+        assert_eq!(winner.name, "libfoo.so.1.2.3");
+        assert!(!winner.is_link);
 
-        let result = deduplicate_libraries(&libs);
-        let names: Vec<&str> = result.iter().map(|l| l.path.file_name().unwrap()).collect();
-        assert_eq!(names, ["libfoo.so.1", "libbar.so.1", "libbaz.so.1"]);
+        // A link never displaces a file.
+        merge_candidate(&mut m, lib("libfoo.so.1.9", "libfoo.so.1", true), dir);
+        assert_eq!(m["libfoo.so.1"].name, "libfoo.so.1.2.3");
     }
 
     #[test]
-    fn dedup_same_filename_different_dirs() {
-        let libs = vec![
-            make_lib("/usr/lib/libfoo.so.1"),
-            make_lib("/lib/libfoo.so.1"),
-        ];
-
-        let result = deduplicate_libraries(&libs);
-        assert_eq!(result.len(), 2); // different dirs, both kept
+    fn higher_version_wins_between_files() {
+        let dir = Utf8Path::new("/usr/lib");
+        let mut m = HashMap::new();
+        merge_candidate(&mut m, lib("libfoo.so.1.2", "libfoo.so.1", false), dir);
+        merge_candidate(&mut m, lib("libfoo.so.1.10", "libfoo.so.1", false), dir);
+        assert_eq!(m["libfoo.so.1"].name, "libfoo.so.1.10");
+        merge_candidate(&mut m, lib("libfoo.so.1.9", "libfoo.so.1", false), dir);
+        assert_eq!(m["libfoo.so.1"].name, "libfoo.so.1.10");
     }
 }

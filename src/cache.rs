@@ -1,6 +1,7 @@
 //! Cache API.
 //!
-//! Provides unified interface for reading, querying, and writing ld.so.cache files.
+//! Provides unified interface for reading, querying, and writing
+//! ld.so.cache files.
 //!
 //! # Examples
 //!
@@ -23,19 +24,15 @@
 //! # Ok::<(), ldconfig::Error>(())
 //! ```
 
-use crate::cache_format::{self, CacheInfo as InternalCacheInfo};
-use crate::elf::parse_elf_file;
-use crate::scanner::{
-    deduplicate_libraries, deduplicate_scan_directories, scan_all_libraries, should_include_symlink,
-};
-use crate::symlinks;
-use crate::{atomic_write, error::Error, SearchPaths};
+use crate::cache_format::{self, flags_string, CacheInfo as InternalCacheInfo, FileEntry};
+use crate::scanner::{collect_dirs, scan_dir};
+use crate::{atomic_write, error::Error, symlinks, SearchPaths};
 use bon::bon;
-use camino::Utf8Path;
+use camino::{Utf8Path, Utf8PathBuf};
 use std::fmt;
 use std::fs;
 use std::path::Path;
-use tracing::{debug, info};
+use tracing::info;
 
 /// Information about the cache file
 #[derive(Debug, Clone)]
@@ -49,9 +46,25 @@ pub struct CacheInfo {
 pub struct CacheEntry {
     pub soname: String,
     pub path: String,
+    /// Flag description as printed by ldconfig -p, e.g. "libc6,x86-64".
     pub arch: String,
     pub hwcap: u64,
+    /// glibc-hwcaps subdirectory name for extension entries.
+    pub hwcaps: Option<String>,
     pub flags: u32,
+}
+
+impl fmt::Display for CacheEntry {
+    /// One `ldconfig -p` line, matching glibc's print_entry.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "\t{} ({}", self.soname, self.arch)?;
+        if let Some(name) = &self.hwcaps {
+            write!(f, ", hwcap: \"{}\"", name)?;
+        } else if self.hwcap != 0 {
+            write!(f, ", hwcap: {:#018x}", self.hwcap)?;
+        }
+        write!(f, ") => {}", self.path)
+    }
 }
 
 /// Cache for dynamic linker library information
@@ -63,30 +76,29 @@ pub struct CacheEntry {
 /// - Get cache metadata
 pub struct Cache {
     data: Vec<u8>,
-    info: Option<InternalCacheInfo>,
+    info: InternalCacheInfo,
 }
 
 /// Iterator over cache entries
 pub struct CacheEntries<'a> {
     cache: &'a Cache,
-    entries: Option<std::slice::Iter<'a, crate::cache_format::CacheEntry>>,
+    entries: std::slice::Iter<'a, cache_format::CacheEntry>,
 }
 
 impl<'a> Iterator for CacheEntries<'a> {
     type Item = CacheEntry;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let entries = self.entries.as_mut()?;
-        let entry = entries.next()?;
+        let entry = self.entries.next()?;
         let soname = self.cache.extract_string(entry.key_offset).ok()?;
         let path = self.cache.extract_string(entry.value_offset).ok()?;
-        let arch = decode_arch_flags(entry.flags);
 
         Some(CacheEntry {
             soname,
             path,
-            arch: arch.to_string(),
+            arch: flags_string(entry.flags),
             hwcap: entry.hwcap,
+            hwcaps: entry.hwcaps.clone(),
             flags: entry.flags,
         })
     }
@@ -109,77 +121,60 @@ impl Cache {
         #[builder(into, default = "/")]
         prefix: &Utf8Path,
     ) -> Result<Self, Error> {
-        let scan_dirs = deduplicate_scan_directories(search_paths);
+        let prefix = normalize_prefix(prefix);
+        let update_links = update_symlinks && !dry_run;
+        let dirs = collect_dirs(search_paths, &prefix);
 
-        debug!("Scanning directories: {:?}", scan_dirs);
-
-        // STEP 1: Single scan - collect all real files and symlinks
-        let (real_files, existing_symlinks) = scan_all_libraries(&scan_dirs)?;
-
-        debug!(
-            "Found {} real files, {} existing symlinks",
-            real_files.len(),
-            existing_symlinks.len()
-        );
-
-        // STEP 2: Update symlinks from real files
-        let mut new_symlink_actions = Vec::new();
-        if update_symlinks && !dry_run {
-            for dir in &scan_dirs {
-                if let Ok(actions) = symlinks::update(dir.as_std_path(), &real_files, dry_run) {
-                    if !actions.is_empty() {
-                        debug!("Symlink actions in {}:", dir);
-                        for action in &actions {
-                            debug!("  {} -> {}", action.link, action.target);
+        let mut entries = Vec::new();
+        for dir in &dirs {
+            for lib in scan_dir(dir, &prefix, update_links) {
+                // The cached file name is the soname for regular
+                // directories (relying on the symlink), the actual file
+                // for glibc-hwcaps subdirectories (search_dir).
+                let value_name = match &dir.hwcaps {
+                    None => {
+                        // Don't create links to links.
+                        if update_links && !lib.is_link {
+                            symlinks::create_link(
+                                &prefix,
+                                &dir.real,
+                                &dir.path,
+                                &lib.name,
+                                &lib.soname,
+                            );
                         }
+                        &lib.soname
                     }
-                    new_symlink_actions.extend(actions);
-                }
+                    Some(_) => &lib.name,
+                };
+                entries.push(FileEntry {
+                    path: format!("{}/{}", dir.path, value_name),
+                    soname: lib.soname,
+                    flags: lib.flags,
+                    isa_level: lib.isa_level,
+                    hwcaps: dir.hwcaps.clone(),
+                });
             }
         }
 
-        // STEP 3: Build cache entries from real files + symlinks
-        let mut cache_entries = Vec::new();
+        info!("Cache entries: {} libraries", entries.len());
 
-        // Add real files where filename == SONAME
-        for lib in &real_files {
-            let filename = lib.path.file_name().unwrap_or("");
-            if filename == lib.soname {
-                cache_entries.push(lib.clone());
-            }
-        }
+        let data = cache_format::build_cache(&entries);
+        let info = cache_format::parse_cache(&data)?;
+        Ok(Self { data, info })
+    }
+}
 
-        // Add existing symlinks (with filtering)
-        for lib in &existing_symlinks {
-            let filename = lib.path.file_name().unwrap_or("");
-            if should_include_symlink(filename, &lib.soname, &lib.path) {
-                cache_entries.push(lib.clone());
-            }
-        }
-
-        // Add newly created symlinks
-        for action in &new_symlink_actions {
-            if let Some(lib) = parse_elf_file(action.link.as_std_path()) {
-                cache_entries.push(lib);
-            }
-        }
-
-        // Deduplicate by (directory, filename)
-        let unique_libraries = deduplicate_libraries(&cache_entries);
-
-        info!("Cache entries: {} unique libraries", unique_libraries.len());
-
-        let data = cache_format::build_cache(&unique_libraries, prefix);
-        Ok(Cache::from_bytes_raw(data))
+fn normalize_prefix(prefix: &Utf8Path) -> Utf8PathBuf {
+    let trimmed = prefix.as_str().trim_end_matches('/');
+    if trimmed.is_empty() {
+        Utf8PathBuf::from("/")
+    } else {
+        Utf8PathBuf::from(trimmed)
     }
 }
 
 impl Cache {
-    /// Create cache from raw bytes (for writing)
-    pub(crate) fn from_bytes_raw(data: Vec<u8>) -> Self {
-        Self { data, info: None }
-    }
-
     /// Read and parse cache from file path
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, Error> {
         let data = fs::read(path.as_ref())?;
@@ -191,22 +186,15 @@ impl Cache {
         let info = cache_format::parse_cache(data)?;
         Ok(Self {
             data: data.to_vec(),
-            info: Some(info),
+            info,
         })
     }
 
     /// Get cache metadata
     pub fn info(&self) -> CacheInfo {
-        if let Some(ref info) = self.info {
-            CacheInfo {
-                num_entries: info.entries.len(),
-                generator: info.generator.clone(),
-            }
-        } else {
-            CacheInfo {
-                num_entries: 0,
-                generator: None,
-            }
+        CacheInfo {
+            num_entries: self.info.entries.len(),
+            generator: self.info.generator.clone(),
         }
     }
 
@@ -214,7 +202,7 @@ impl Cache {
     pub fn entries(&self) -> CacheEntries<'_> {
         CacheEntries {
             cache: self,
-            entries: self.info.as_ref().map(|info| info.entries.iter()),
+            entries: self.info.entries.iter(),
         }
     }
 
@@ -256,55 +244,13 @@ impl Cache {
 
 impl fmt::Display for Cache {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(ref info) = self.info {
-            writeln!(f, "{} libs found in cache", info.entries.len())?;
-
-            for entry in &info.entries {
-                // Extract strings - if any fail, skip this entry
-                let Ok(libname) = self.extract_string(entry.key_offset) else {
-                    continue;
-                };
-                let Ok(libpath) = self.extract_string(entry.value_offset) else {
-                    continue;
-                };
-                let arch_str = decode_arch_flags(entry.flags);
-
-                write!(f, "\t{} ({})", libname, arch_str)?;
-
-                if entry.hwcap != 0 {
-                    write!(f, ", hwcap: 0x{:016x}", entry.hwcap)?;
-                }
-
-                writeln!(f, " => {}", libpath)?;
-            }
-
-            if let Some(ref generator) = info.generator {
-                writeln!(f, "Cache generated by: {}", generator)?;
-            }
-        } else {
-            writeln!(f, "Cache not parsed (binary only)")?;
+        writeln!(f, "{} libs found in cache", self.info.entries.len())?;
+        for entry in self.entries() {
+            writeln!(f, "{}", entry)?;
         }
-
+        if let Some(generator) = &self.info.generator {
+            writeln!(f, "Cache generated by: {}", generator)?;
+        }
         Ok(())
-    }
-}
-
-/// Decode architecture from flags (matches ldconfig output format)
-fn decode_arch_flags(flags: u32) -> &'static str {
-    let arch_bits = (flags >> 8) & 0xff;
-    match arch_bits {
-        0x00 => "libc6",                // i386/generic ELF
-        0x01 => "libc6,SPARC 64-bit",   // SPARC 64-bit
-        0x03 => "libc6,x86-64",         // x86_64
-        0x04 => "libc6,64bit",          // PowerPC/S390 64-bit
-        0x05 => "libc6,64bit",          // PowerPC 64-bit (official)
-        0x06 => "libc6,IA-64",          // IA-64
-        0x07 => "libc6,MIPS 64-bit",    // MIPS 64-bit
-        0x08 => "libc6,x32",            // x32
-        0x09 => "libc6,ARM,hard-float", // ARM hard-float
-        0x0a => "libc6,AArch64",        // AArch64
-        0x0b => "libc6,ARM,soft-float", // ARM soft-float
-        0x10 => "libc6,RISC-V 64-bit",  // RISC-V lp64d
-        _ => "unknown",
     }
 }

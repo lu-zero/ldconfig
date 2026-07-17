@@ -33,8 +33,8 @@
 
 // Internal implementation modules
 pub(crate) mod cache_format;
+pub(crate) mod chroot;
 pub(crate) mod elf;
-pub(crate) mod hwcap;
 pub(crate) mod scanner;
 pub(crate) mod symlinks;
 
