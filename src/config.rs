@@ -74,15 +74,19 @@ impl From<Vec<Utf8PathBuf>> for SearchPaths {
     }
 }
 
-/// Directive keyword followed by a blank, as glibc matches them.
-fn directive<'a>(line: &'a str, keyword: &str) -> Option<&'a str> {
-    let rest = if line.len() >= keyword.len() && line[..keyword.len()].eq_ignore_ascii_case(keyword)
-    {
-        &line[keyword.len()..]
-    } else {
+/// Directive keyword followed by a blank. glibc matches `include`
+/// case-sensitively but `hwcap` case-insensitively.
+fn directive<'a>(line: &'a str, keyword: &str, ignore_case: bool) -> Option<&'a str> {
+    if line.len() < keyword.len() {
         return None;
+    }
+    let (head, rest) = line.split_at(keyword.len());
+    let matches = if ignore_case {
+        head.eq_ignore_ascii_case(keyword)
+    } else {
+        head == keyword
     };
-    rest.starts_with([' ', '\t']).then_some(rest)
+    (matches && rest.starts_with([' ', '\t'])).then_some(rest)
 }
 
 fn parse_conf(file: &Utf8Path, prefix: Option<&Utf8Path>, dirs: &mut Vec<Utf8PathBuf>, depth: u32) {
@@ -115,11 +119,11 @@ fn parse_conf(file: &Utf8Path, prefix: Option<&Utf8Path>, dirs: &mut Vec<Utf8Pat
         if line.is_empty() {
             continue;
         }
-        if let Some(rest) = directive(line, "include") {
+        if let Some(rest) = directive(line, "include", false) {
             for pattern in rest.split_whitespace() {
                 expand_include(file, prefix, pattern, dirs, depth);
             }
-        } else if directive(line, "hwcap").is_some() {
+        } else if directive(line, "hwcap", true).is_some() {
             warn!("{}: hwcap directive ignored", file);
         } else {
             let dir = line.trim_end_matches('/');
