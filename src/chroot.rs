@@ -8,8 +8,9 @@ const ELOOP_MAX: u32 = 40;
 
 /// Canonicalize `name` as if chroot(`root`) was done first: resolves `.`,
 /// `..`, and symlinks without ever escaping `root`. Every component except
-/// the last must exist. Returns the path including the `root` prefix.
-pub(crate) fn chroot_canon(root: &Utf8Path, name: &Utf8Path) -> Option<Utf8PathBuf> {
+/// the last must exist. Returns the path including the `root` prefix, or
+/// the input unchanged when `root` is `/`.
+pub fn chroot_canon(root: &Utf8Path, name: &Utf8Path) -> Option<Utf8PathBuf> {
     let root = root.as_str().trim_end_matches('/');
     if root.is_empty() {
         return Some(name.to_path_buf());

@@ -1,6 +1,6 @@
 use bpaf::Bpaf;
 use camino::{Utf8Path, Utf8PathBuf};
-use ldconfig::{Cache, Error, SearchPaths};
+use ldconfig::{chroot_canon, Cache, Error, SearchPaths};
 use tracing::{debug, Level};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
@@ -60,13 +60,13 @@ fn init_logging(verbose: bool) {
         .init();
 }
 
-/// Place a cache path under the -r root.
-fn under_root(root: &Utf8Path, path: &Utf8Path) -> Utf8PathBuf {
-    if root == "/" {
-        path.to_path_buf()
-    } else {
-        root.join(path.as_str().trim_start_matches('/'))
-    }
+/// Resolve the cache file's directory inside the -r root and append the
+/// file name, like glibc's main(); symlinks cannot escape the root and
+/// the temp-file rename stays confined.
+fn cache_file_under_root(root: &Utf8Path, path: &Utf8Path) -> Option<Utf8PathBuf> {
+    let parent = path.parent().unwrap_or(Utf8Path::new("/"));
+    let dir = chroot_canon(root, parent)?;
+    Some(dir.join(path.file_name()?))
 }
 
 fn print_cache(cache_path: &Utf8Path) -> Result<(), Error> {
@@ -100,10 +100,13 @@ fn run() -> Result<(), Error> {
     let cache_path = options
         .cache
         .unwrap_or_else(|| Utf8PathBuf::from("/etc/ld.so.cache"));
-    let real_cache_path = under_root(&root, &cache_path);
 
     if options.print_cache {
-        return print_cache(&real_cache_path);
+        let Some(real) = chroot_canon(&root, &cache_path) else {
+            eprintln!("ldconfig: Can't open cache file {}", cache_path);
+            std::process::exit(1);
+        };
+        return print_cache(&real);
     }
 
     let build_cache = !(options.no_cache || options.only_cline);
@@ -138,8 +141,12 @@ fn run() -> Result<(), Error> {
         .build(&search_paths)?;
 
     if build_cache {
-        cache.write_to_file(&real_cache_path)?;
-        debug!("Wrote {} bytes to {}", cache.size(), real_cache_path);
+        let Some(real) = cache_file_under_root(&root, &cache_path) else {
+            eprintln!("ldconfig: Can't open cache file directory {}", cache_path);
+            std::process::exit(1);
+        };
+        cache.write_to_file(&real)?;
+        debug!("Wrote {} bytes to {}", cache.size(), real);
     }
 
     Ok(())
