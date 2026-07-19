@@ -39,6 +39,18 @@ struct Options {
     /// Use CONF as configuration file
     config_file: Option<Utf8PathBuf>,
 
+    #[bpaf(short('c'), long("format"), argument("FMT"))]
+    /// Use FMT as cache format (only "new" supported; "old" and "compat" not implemented)
+    cache_format: Option<String>,
+
+    #[bpaf(short('i'))]
+    /// Ignore auxiliary cache file (not implemented, present for compatibility)
+    ignore_aux_cache: bool,
+
+    #[bpaf(short('l'))]
+    /// Interpret operands as library names (not implemented, present for compatibility)
+    library_mode: bool,
+
     #[bpaf(positional("DIRS"))]
     /// Additional directories to process
     dirs: Vec<Utf8PathBuf>,
@@ -92,6 +104,22 @@ fn main() {
 fn run() -> Result<(), Error> {
     let options = options().run();
     init_logging(options.verbose);
+
+    // Validate and handle unimplemented options
+    if let Some(ref fmt) = options.cache_format {
+        if fmt != "new" {
+            eprintln!("ldconfig: cache format '{}' not supported (only new format is implemented)", fmt);
+            std::process::exit(1);
+        }
+    }
+    if options.ignore_aux_cache {
+        eprintln!("ldconfig: -i (ignore auxiliary cache) is not implemented");
+        std::process::exit(1);
+    }
+    if options.library_mode {
+        eprintln!("ldconfig: -l (library mode) is not implemented");
+        std::process::exit(1);
+    }
 
     let root = {
         let trimmed = options.root.as_str().trim_end_matches('/');
