@@ -77,10 +77,9 @@ impl From<Vec<Utf8PathBuf>> for SearchPaths {
 /// Directive keyword followed by a blank. glibc matches `include`
 /// case-sensitively but `hwcap` case-insensitively.
 fn directive<'a>(line: &'a str, keyword: &str, ignore_case: bool) -> Option<&'a str> {
-    if line.len() < keyword.len() {
-        return None;
-    }
-    let (head, rest) = line.split_at(keyword.len());
+    // checked: a non-char-boundary can only occur when the prefix is not
+    // the ASCII keyword, so None is simply "no match".
+    let (head, rest) = line.split_at_checked(keyword.len())?;
     let matches = if ignore_case {
         head.eq_ignore_ascii_case(keyword)
     } else {
@@ -242,6 +241,18 @@ mod tests {
                 "/lib64",
             ]
         );
+    }
+
+    #[test]
+    fn non_ascii_lines_are_directories_not_panics() {
+        let (_tmp, root) = tempdir();
+        write(
+            &root.join("ld.so.conf"),
+            "/lib/\u{65e5}\ninclud\u{e9} x\n/ok/lib\n",
+        );
+        let paths = SearchPaths::from_file(root.join("ld.so.conf"), None).unwrap();
+        let dirs: Vec<&str> = paths.iter().map(|d| d.as_str()).collect();
+        assert_eq!(dirs[..3], ["/lib/\u{65e5}", "includ\u{e9} x", "/ok/lib"]);
     }
 
     #[test]

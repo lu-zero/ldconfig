@@ -46,6 +46,7 @@ mod error;
 
 // Main public API exports
 pub use cache::{Cache, CacheBuilder, CacheEntry, CacheInfo};
+pub use chroot::chroot_canon;
 pub use config::SearchPaths;
 
 /// Errors encountered while reading or writing the cache
