@@ -124,13 +124,13 @@ fn run() -> Result<(), Error> {
             .config_file
             .unwrap_or_else(|| Utf8PathBuf::from("/etc/ld.so.conf"));
         let prefix = (root != "/").then_some(root.as_path());
-        let mut dirs = options.dirs;
-        dirs.extend(
-            SearchPaths::from_file(&config_path, prefix)?
-                .iter()
-                .cloned(),
-        );
-        SearchPaths::new(dirs)
+        let config_search = SearchPaths::from_file(&config_path, prefix)?.with_system();
+        let all_dirs: Vec<_> = options.dirs
+            .iter()
+            .chain(config_search.iter())
+            .cloned()
+            .collect();
+        SearchPaths::new(all_dirs)
     };
 
     debug!("Directories to scan: {:?}", &*search_paths);

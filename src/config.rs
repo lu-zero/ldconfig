@@ -26,9 +26,7 @@ pub struct SearchPaths(Vec<Utf8PathBuf>);
 impl SearchPaths {
     /// Parse a configuration file. `path` names the file inside `prefix`
     /// (the -r root); includes are expanded in place and resolved inside
-    /// the prefix. The built-in system directories are appended last.
-    /// Missing or unreadable files yield only the built-in directories,
-    /// with a warning, like glibc.
+    /// the prefix.
     pub fn from_file(path: impl AsRef<Utf8Path>, prefix: Option<&Utf8Path>) -> Result<Self, Error> {
         let prefix = prefix
             .map(|p| p.as_str().trim_end_matches('/'))
@@ -37,8 +35,13 @@ impl SearchPaths {
 
         let mut dirs = Vec::new();
         parse_conf(path.as_ref(), prefix, &mut dirs, 0);
-        dirs.extend(SYSTEM_DIRS.map(Utf8PathBuf::from));
         Ok(Self(dirs))
+    }
+
+    /// Append the built-in system directories to the search paths.
+    pub fn with_system(mut self) -> Self {
+        self.0.extend(SYSTEM_DIRS.map(Utf8PathBuf::from));
+        self
     }
 
     /// Create config from explicit directory list
@@ -224,7 +227,7 @@ mod tests {
         write(&root.join("ld.so.conf.d/b.conf"), "/b/lib\n");
         write(&root.join("ld.so.conf.d/sub/n.conf"), "/nested/lib\n");
 
-        let paths = SearchPaths::from_file(root.join("ld.so.conf"), None).unwrap();
+        let paths = SearchPaths::from_file(root.join("ld.so.conf"), None).unwrap().with_system();
         let dirs: Vec<&str> = paths.iter().map(|d| d.as_str()).collect();
         // Include expands where it appears (before /opt/lib), nested
         // includes work, system dirs come last.
@@ -286,7 +289,7 @@ mod tests {
     #[test]
     fn missing_config_yields_system_dirs() {
         let (_tmp, root) = tempdir();
-        let paths = SearchPaths::from_file(root.join("nonexistent.conf"), None).unwrap();
+        let paths = SearchPaths::from_file(root.join("nonexistent.conf"), None).unwrap().with_system();
         let dirs: Vec<&str> = paths.iter().map(|d| d.as_str()).collect();
         assert_eq!(dirs, ["/usr/lib", "/usr/lib64", "/lib", "/lib64"]);
     }
