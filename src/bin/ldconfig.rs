@@ -39,6 +39,18 @@ struct Options {
     /// Use CONF as configuration file
     config_file: Option<Utf8PathBuf>,
 
+    #[bpaf(short('c'), long("format"), argument("FMT"))]
+    /// Use FMT as cache format (only "new" supported; "old" and "compat" not implemented)
+    cache_format: Option<String>,
+
+    #[bpaf(short('i'))]
+    /// Ignore auxiliary cache file (not implemented, present for compatibility)
+    ignore_aux_cache: bool,
+
+    #[bpaf(short('l'))]
+    /// Interpret operands as library names (not implemented, present for compatibility)
+    library_mode: bool,
+
     #[bpaf(positional("DIRS"))]
     /// Additional directories to process
     dirs: Vec<Utf8PathBuf>,
@@ -82,16 +94,34 @@ fn print_cache(cache_path: &Utf8Path) -> Result<(), Error> {
     Ok(())
 }
 
+/// Report a fatal error the way glibc's ldconfig does and exit.
+fn die(msg: impl std::fmt::Display) -> ! {
+    eprintln!("ldconfig: {msg}");
+    std::process::exit(1)
+}
+
 fn main() {
     if let Err(e) = run() {
-        eprintln!("ldconfig: {}", e);
-        std::process::exit(1);
+        die(e);
     }
 }
 
 fn run() -> Result<(), Error> {
     let options = options().run();
     init_logging(options.verbose);
+
+    // Validate and handle unimplemented options
+    if let Some(fmt) = options.cache_format.as_deref().filter(|f| *f != "new") {
+        die(format_args!(
+            "cache format '{fmt}' not supported (only new format is implemented)"
+        ));
+    }
+    if options.ignore_aux_cache {
+        die("-i (ignore auxiliary cache) is not implemented");
+    }
+    if options.library_mode {
+        die("-l (library mode) is not implemented");
+    }
 
     let root = {
         let trimmed = options.root.as_str().trim_end_matches('/');
@@ -103,8 +133,7 @@ fn run() -> Result<(), Error> {
 
     if options.print_cache {
         let Some(real) = chroot_canon(&root, &cache_path) else {
-            eprintln!("ldconfig: Can't open cache file {}", cache_path);
-            std::process::exit(1);
+            die(format_args!("Can't open cache file {cache_path}"));
         };
         return print_cache(&real);
     }
@@ -112,8 +141,7 @@ fn run() -> Result<(), Error> {
     let build_cache = !(options.no_cache || options.only_cline);
     if build_cache {
         if let Some(dir) = options.dirs.iter().find(|d| !d.as_str().starts_with('/')) {
-            eprintln!("ldconfig: relative path `{}' used to build cache", dir);
-            std::process::exit(1);
+            die(format_args!("relative path `{dir}' used to build cache"));
         }
     }
 
@@ -143,8 +171,7 @@ fn run() -> Result<(), Error> {
 
     if build_cache {
         let Some(real) = cache_file_under_root(&root, &cache_path) else {
-            eprintln!("ldconfig: Can't open cache file directory {}", cache_path);
-            std::process::exit(1);
+            die(format_args!("Can't open cache file directory {cache_path}"));
         };
         cache.write_to_file(&real)?;
         debug!("Wrote {} bytes to {}", cache.size(), real);
