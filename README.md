@@ -1,5 +1,8 @@
 # ldconfig - Portable Rust Implementation
 
+[![LICENSE](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![dependency status](https://deps.rs/repo/github/lu-zero/ldconfig/status.svg)](https://deps.rs/repo/github/lu-zero/ldconfig)
+
 A Rust implementation of ldconfig for building and managing glibc `ld.so.cache` files.
 
 This library provides both a command-line tool and a high-level API for:
@@ -27,11 +30,45 @@ matching glibc 2.33+.
 
 ## Command-Line Usage
 
-Options follow glibc ldconfig: `-p` print, `-N` no cache rebuild, `-X` no
-symlink updates, `-n` only command-line directories, `-r` alternate root,
-`-C` cache file, `-f` config file, `-v` verbose, plus additional directories
-as positional arguments. `-l`, `-i`, `-c` and the aux-cache are not
-implemented; only the new cache format is written.
+Options follow glibc ldconfig:
+
+| Flag | Description |
+|------|-------------|
+| `-p` | Print cache contents |
+| `-N` | Don't rebuild the cache (but still update symlinks) |
+| `-X` | Don't update symbolic links |
+| `-n` | Only process directories given on the command line |
+| `-r ROOT` | Change to and use ROOT as root directory |
+| `-C CACHE` | Use CACHE as cache file |
+| `-f CONF` | Use CONF as configuration file |
+| `-c FMT` | Use FMT as cache format (only "new" supported) |
+| `-i` | Ignore auxiliary cache file (not implemented) |
+| `-l` | Interpret operands as library names (not implemented) |
+| `-v` | Verbose output |
+
+Additional directories can be specified as positional arguments.
+
+**Note:** The `-N` flag semantics changed in 0.2.0 from "dry run (no writes at all)" to
+"don't rebuild cache" to match glibc behavior. For a true dry run (no cache write and no
+symlink updates), use `-N -X`.
+
+## Library API
+
+The `SearchPaths::from_file` method now returns only the directories from the config file.
+Use `.with_system()` to append the standard system directories (`/usr/lib`, `/usr/lib64`, `/lib`, `/lib64`):
+
+```rust
+use ldconfig::SearchPaths;
+
+// Only config directories
+let paths = SearchPaths::from_file("/etc/ld.so.conf", None)?;
+
+// Config directories + system directories (glibc-compatible)
+let paths = SearchPaths::from_file("/etc/ld.so.conf", None)?.with_system();
+
+// Only system directories
+let paths = SearchPaths::default();
+```
 
 ### Print cache contents
 
