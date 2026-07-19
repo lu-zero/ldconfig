@@ -127,6 +127,7 @@ fn run() -> Result<(), Error> {
         let mut dirs = options.dirs;
         dirs.extend(
             SearchPaths::from_file(&config_path, prefix)?
+                .with_system()
                 .iter()
                 .cloned(),
         );
