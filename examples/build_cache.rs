@@ -19,7 +19,7 @@ fn main() -> Result<(), Error> {
     println!("Building cache for root: {}", root);
 
     let prefix = (root != "/").then_some(root.as_path());
-    let search_paths = SearchPaths::from_file(Utf8Path::new("/etc/ld.so.conf"), prefix)?;
+    let search_paths = SearchPaths::from_file(Utf8Path::new("/etc/ld.so.conf"), prefix)?.with_system();
 
     println!("Directories to scan: {:?}", &*search_paths);
 
