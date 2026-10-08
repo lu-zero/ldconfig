@@ -206,7 +206,7 @@ Not implemented:
 
 - The old and compat cache formats (`-c old`, `-c compat`).
 - The auxiliary cache (`/var/cache/ldconfig/aux-cache`), so `-i` has nothing
-  to ignore; it is rejected today.
+  to ignore; the flag is accepted and does nothing.
 - Library mode (`-l`).
 - `hwcap` directives in `ld.so.conf` are ignored with a warning, as in current
   glibc.
