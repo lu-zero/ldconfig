@@ -1,5 +1,5 @@
 // ldconfig - Portable Rust implementation
-// MIT OR Apache-2.0, 2025
+// MIT, 2025
 
 //! A portable Rust implementation of ldconfig for managing dynamic linker cache files.
 //!
@@ -21,15 +21,27 @@
 //!
 //! # Example: Build and write a cache
 //!
+//! Building scans the directories and, unless told otherwise, also updates
+//! the soname symlinks in them, as `ldconfig` does. Pass
+//! `.update_symlinks(false)` to only read.
+//!
 //! ```no_run
 //! use ldconfig::{SearchPaths, Cache};
 //!
-//! let search_paths = SearchPaths::from_file("/etc/ld.so.conf", None)?;
+//! // The configured directories plus the built-in system ones, like glibc.
+//! let search_paths = SearchPaths::from_file("/etc/ld.so.conf", None)?.with_system();
 //! let cache = Cache::builder()
+//!     .update_symlinks(false)
 //!     .build(&search_paths)?;
 //! cache.write_to_file("/etc/ld.so.cache")?;
 //! # Ok::<(), ldconfig::Error>(())
 //! ```
+//!
+//! # Foreign roots
+//!
+//! With a `prefix`, libraries of another architecture are cached as long as
+//! it has the host's byte order: both the ELF reader and the cache writer
+//! work in native endianness, as glibc's `ldconfig` does.
 
 // Internal implementation modules
 pub(crate) mod cache_format;
