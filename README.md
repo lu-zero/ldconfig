@@ -250,6 +250,9 @@ The cache contents match glibc's. The behaviour differs in a few places:
   library never stops resolving during an update.
 - **All architectures in one binary.** glibc's `ldconfig` only handles the
   machine it was built for.
+- **A relative `include` works under a root.** glibc refuses one when `-r` is
+  given; here `include ld.so.conf.d/*.conf` resolves inside the root, so a
+  stock configuration can be processed from outside.
 - **Only the new cache format** (`glibc-ld.so.cache1.1`, glibc 2.2 and later)
   is read and written.
 - **No auxiliary cache**, and no library mode (`-l`).
