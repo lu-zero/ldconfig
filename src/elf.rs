@@ -6,8 +6,8 @@
 use goblin::container::{Container, Ctx};
 use goblin::elf::dynamic::{Dynamic, DT_SONAME};
 use goblin::elf::header::{
-    Header, EI_DATA, ELFDATA2LSB, ELFDATA2MSB, EM_386, EM_AARCH64, EM_ARM, EM_PPC, EM_PPC64,
-    EM_RISCV, EM_X86_64, ET_DYN,
+    Header, EI_DATA, ELFDATA2LSB, ELFDATA2MSB, EM_386, EM_AARCH64, EM_ARM, EM_LOONGARCH, EM_MIPS,
+    EM_PPC, EM_PPC64, EM_RISCV, EM_S390, EM_SPARC, EM_SPARC32PLUS, EM_SPARCV9, EM_X86_64, ET_DYN,
 };
 use goblin::elf::program_header::{ProgramHeader, PT_DYNAMIC, PT_LOAD};
 use memmap2::Mmap;
@@ -16,8 +16,12 @@ use std::path::Path;
 use tracing::debug;
 
 use crate::cache_format::{
-    FLAG_AARCH64_LIB64, FLAG_ARM_LIBHF, FLAG_ARM_LIBSF, FLAG_ELF_LIBC6, FLAG_POWERPC_LIB64,
-    FLAG_RISCV_FLOAT_ABI_DOUBLE, FLAG_RISCV_FLOAT_ABI_SOFT, FLAG_X8664_LIB64, FLAG_X8664_LIBX32,
+    FLAG_AARCH64_LIB64, FLAG_ARM_LIBHF, FLAG_ARM_LIBSF, FLAG_ELF_LIBC6,
+    FLAG_LARCH_FLOAT_ABI_DOUBLE, FLAG_LARCH_FLOAT_ABI_SOFT, FLAG_MIPS64_LIBN32,
+    FLAG_MIPS64_LIBN32_NAN2008, FLAG_MIPS64_LIBN64, FLAG_MIPS64_LIBN64_NAN2008,
+    FLAG_MIPS_LIB32_NAN2008, FLAG_POWERPC_LIB64, FLAG_RISCV_FLOAT_ABI_DOUBLE,
+    FLAG_RISCV_FLOAT_ABI_SOFT, FLAG_S390_LIB64, FLAG_SPARC_LIB64, FLAG_X8664_LIB64,
+    FLAG_X8664_LIBX32,
 };
 
 const PT_GNU_PROPERTY: u32 = 0x6474_e553;
@@ -33,6 +37,13 @@ const EF_RISCV_RVC: u32 = 0x0001;
 const EF_RISCV_FLOAT_ABI: u32 = 0x0006;
 const EF_RISCV_FLOAT_ABI_SOFT: u32 = 0x0000;
 const EF_RISCV_FLOAT_ABI_DOUBLE: u32 = 0x0004;
+
+const EF_LARCH_ABI_SOFT_FLOAT: u32 = 0x01;
+const EF_LARCH_ABI_DOUBLE_FLOAT: u32 = 0x03;
+const EF_LARCH_OBJABI_V1: u32 = 0x40;
+
+const EF_MIPS_ABI2: u32 = 0x20;
+const EF_MIPS_NAN2008: u32 = 0x400;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ElfInfo {
@@ -110,14 +121,19 @@ fn inspect_bytes(data: &[u8], path: &Path) -> Option<ElfInfo> {
 }
 
 /// Per-machine cache flags, following the sysdeps readelflib.c variants.
+///
+/// glibc builds one variant per architecture; a machine with no variant of
+/// its own gets the generic `FLAG_ELF_LIBC6`. A class the machine's variant
+/// does not cover is rejected.
 fn machine_flags(h: &Header, is_64: bool) -> Option<u32> {
-    match (h.e_machine, is_64) {
-        (EM_X86_64, true) => Some(FLAG_X8664_LIB64 | FLAG_ELF_LIBC6),
-        (EM_X86_64, false) => Some(FLAG_X8664_LIBX32 | FLAG_ELF_LIBC6),
+    match h.e_machine {
+        EM_X86_64 if is_64 => Some(FLAG_X8664_LIB64 | FLAG_ELF_LIBC6),
+        EM_X86_64 => Some(FLAG_X8664_LIBX32 | FLAG_ELF_LIBC6),
         // Every ix86 object (i386 through i686) carries EM_386.
-        (EM_386, false) => Some(FLAG_ELF_LIBC6),
-        (EM_AARCH64, true) => Some(FLAG_AARCH64_LIB64 | FLAG_ELF_LIBC6),
-        (EM_ARM, false) => {
+        EM_386 => (!is_64).then_some(FLAG_ELF_LIBC6),
+        EM_AARCH64 => is_64.then_some(FLAG_AARCH64_LIB64 | FLAG_ELF_LIBC6),
+        EM_ARM if is_64 => None,
+        EM_ARM => {
             if h.e_flags & EF_ARM_EABIMASK == EF_ARM_EABI_VER5 {
                 if h.e_flags & EF_ARM_ABI_FLOAT_HARD != 0 {
                     Some(FLAG_ARM_LIBHF | FLAG_ELF_LIBC6)
@@ -131,9 +147,9 @@ fn machine_flags(h: &Header, is_64: bool) -> Option<u32> {
                 Some(FLAG_ELF_LIBC6)
             }
         }
-        (EM_PPC64, true) => Some(FLAG_POWERPC_LIB64 | FLAG_ELF_LIBC6),
-        (EM_PPC, false) => Some(FLAG_ELF_LIBC6),
-        (EM_RISCV, _) => {
+        EM_PPC64 => is_64.then_some(FLAG_POWERPC_LIB64 | FLAG_ELF_LIBC6),
+        EM_PPC => (!is_64).then_some(FLAG_ELF_LIBC6),
+        EM_RISCV => {
             // glibc rejects anything beyond the float ABI and RVC bits.
             if h.e_flags & !(EF_RISCV_FLOAT_ABI | EF_RISCV_RVC) != 0 {
                 return None;
@@ -144,7 +160,37 @@ fn machine_flags(h: &Header, is_64: bool) -> Option<u32> {
                 _ => None,
             }
         }
-        _ => None,
+        EM_LOONGARCH => {
+            // Some binutils set OBJABI_V1 on shared objects; it only matters
+            // to static linking.
+            let flags = h.e_flags & !EF_LARCH_OBJABI_V1;
+            let supported = EF_LARCH_ABI_SOFT_FLOAT | EF_LARCH_ABI_DOUBLE_FLOAT;
+            if flags & !supported != 0 {
+                return None;
+            }
+            match flags & supported {
+                EF_LARCH_ABI_SOFT_FLOAT => Some(FLAG_LARCH_FLOAT_ABI_SOFT | FLAG_ELF_LIBC6),
+                EF_LARCH_ABI_DOUBLE_FLOAT => Some(FLAG_LARCH_FLOAT_ABI_DOUBLE | FLAG_ELF_LIBC6),
+                _ => None,
+            }
+        }
+        EM_MIPS => {
+            let nan2008 = h.e_flags & EF_MIPS_NAN2008 != 0;
+            let abi = match (is_64, h.e_flags & EF_MIPS_ABI2 != 0, nan2008) {
+                (true, _, false) => FLAG_MIPS64_LIBN64,
+                (true, _, true) => FLAG_MIPS64_LIBN64_NAN2008,
+                (false, true, false) => FLAG_MIPS64_LIBN32,
+                (false, true, true) => FLAG_MIPS64_LIBN32_NAN2008,
+                (false, false, true) => FLAG_MIPS_LIB32_NAN2008,
+                (false, false, false) => 0,
+            };
+            Some(abi | FLAG_ELF_LIBC6)
+        }
+        EM_S390 if is_64 => Some(FLAG_S390_LIB64 | FLAG_ELF_LIBC6),
+        EM_S390 => Some(FLAG_ELF_LIBC6),
+        EM_SPARCV9 => is_64.then_some(FLAG_SPARC_LIB64 | FLAG_ELF_LIBC6),
+        EM_SPARC | EM_SPARC32PLUS => (!is_64).then_some(FLAG_ELF_LIBC6),
+        _ => Some(FLAG_ELF_LIBC6),
     }
 }
 
@@ -245,22 +291,113 @@ fn read_isa_level(data: &[u8], phdrs: &[ProgramHeader], is_64: bool) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache_format::{FLAG_ELF_LIBC6, FLAG_X8664_LIB64};
     use std::path::Path;
 
+    // The C library this test binary itself has loaded: a real shared object
+    // on every glibc host, whatever the architecture.
     #[test]
-    fn inspect_system_libz() {
-        // Only meaningful on an x86-64 host with the usual layout.
-        if !cfg!(target_arch = "x86_64") {
-            return;
+    fn inspect_the_running_libc() {
+        let maps = std::fs::read_to_string("/proc/self/maps").unwrap_or_default();
+        let Some(path) = maps
+            .lines()
+            .filter_map(|l| l.split_whitespace().nth(5))
+            .find(|p| p.ends_with("/libc.so.6"))
+        else {
+            return; // statically linked or not glibc
+        };
+        let info = inspect(Path::new(path)).unwrap();
+        assert_eq!(info.soname.as_deref(), Some("libc.so.6"));
+        assert_eq!(info.flags & FLAG_ELF_LIBC6, FLAG_ELF_LIBC6);
+        if cfg!(target_arch = "x86_64") {
+            assert_eq!(info.flags, FLAG_X8664_LIB64 | FLAG_ELF_LIBC6);
+        } else if cfg!(target_arch = "aarch64") {
+            assert_eq!(info.flags, FLAG_AARCH64_LIB64 | FLAG_ELF_LIBC6);
         }
-        let path = Path::new("/usr/lib/libz.so.1");
-        if !path.exists() {
-            return;
+    }
+
+    fn flags_for(machine: u16, is_64: bool, e_flags: u32) -> Option<u32> {
+        let container = if is_64 {
+            Container::Big
+        } else {
+            Container::Little
+        };
+        let mut header = Header::new(Ctx::new(container, goblin::container::Endian::Little));
+        header.e_machine = machine;
+        header.e_flags = e_flags;
+        machine_flags(&header, is_64)
+    }
+
+    #[test]
+    fn loongarch_flags_follow_the_float_abi() {
+        let libc6 = FLAG_ELF_LIBC6;
+        assert_eq!(
+            flags_for(EM_LOONGARCH, true, 0x03),
+            Some(FLAG_LARCH_FLOAT_ABI_DOUBLE | libc6)
+        );
+        assert_eq!(
+            flags_for(EM_LOONGARCH, true, 0x01),
+            Some(FLAG_LARCH_FLOAT_ABI_SOFT | libc6)
+        );
+        // OBJABI_V1 is ignored; single-float and unknown bits are rejected.
+        assert_eq!(
+            flags_for(EM_LOONGARCH, true, 0x43),
+            Some(FLAG_LARCH_FLOAT_ABI_DOUBLE | libc6)
+        );
+        assert_eq!(flags_for(EM_LOONGARCH, true, 0x02), None);
+        assert_eq!(flags_for(EM_LOONGARCH, true, 0x83), None);
+    }
+
+    #[test]
+    fn mips_flags_follow_abi_and_nan_encoding() {
+        let libc6 = FLAG_ELF_LIBC6;
+        assert_eq!(
+            flags_for(EM_MIPS, true, 0),
+            Some(FLAG_MIPS64_LIBN64 | libc6)
+        );
+        assert_eq!(
+            flags_for(EM_MIPS, true, 0x400),
+            Some(FLAG_MIPS64_LIBN64_NAN2008 | libc6)
+        );
+        assert_eq!(
+            flags_for(EM_MIPS, false, 0x20),
+            Some(FLAG_MIPS64_LIBN32 | libc6)
+        );
+        assert_eq!(
+            flags_for(EM_MIPS, false, 0x420),
+            Some(FLAG_MIPS64_LIBN32_NAN2008 | libc6)
+        );
+        assert_eq!(
+            flags_for(EM_MIPS, false, 0x400),
+            Some(FLAG_MIPS_LIB32_NAN2008 | libc6)
+        );
+        assert_eq!(flags_for(EM_MIPS, false, 0), Some(libc6));
+    }
+
+    #[test]
+    fn a_machine_without_a_variant_gets_the_generic_flag() {
+        const EM_ALPHA: u16 = 0x9026;
+        assert_eq!(flags_for(EM_ALPHA, true, 0), Some(FLAG_ELF_LIBC6));
+        assert_eq!(
+            flags_for(EM_S390, true, 0),
+            Some(FLAG_S390_LIB64 | FLAG_ELF_LIBC6)
+        );
+        assert_eq!(
+            flags_for(EM_SPARCV9, true, 0),
+            Some(FLAG_SPARC_LIB64 | FLAG_ELF_LIBC6)
+        );
+        // A known machine in a class its variant does not cover stays rejected.
+        for (machine, is_64) in [
+            (EM_386, true),
+            (EM_AARCH64, false),
+            (EM_ARM, true),
+            (EM_PPC64, false),
+            (EM_PPC, true),
+            (EM_SPARCV9, false),
+            (EM_SPARC, true),
+            (EM_SPARC32PLUS, true),
+        ] {
+            assert_eq!(flags_for(machine, is_64, 0), None, "{machine} {is_64}");
         }
-        let info = inspect(path).unwrap();
-        assert_eq!(info.soname.as_deref(), Some("libz.so.1"));
-        assert_eq!(info.flags, FLAG_X8664_LIB64 | FLAG_ELF_LIBC6);
     }
 
     #[test]
