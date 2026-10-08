@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `prefix`): it resolves against the including file's directory inside the
   root. It used to be skipped with a warning, so a root with the usual
   `include ld.so.conf.d/*.conf` lost every directory listed there.
+- Includes are found whatever way the root is written. A root given as
+  `./sysroot`, or one whose path contains `*`, `?` or `[`, used to lose every
+  included file without a message.
+- Under a root, an `include` pattern may have wildcards in any component, not
+  only the last one (`include conf.d/*/x.conf`).
 
 ## [0.2.0] - 2026-10-08
 

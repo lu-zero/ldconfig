@@ -31,15 +31,23 @@ impl SearchPaths {
     /// Only the configured directories are returned; chain
     /// [`with_system`](Self::with_system) for what glibc scans. As in
     /// glibc, a missing file gives an empty list and an unreadable one a
-    /// warning, so this currently never returns an error.
+    /// warning. The only error is a `prefix` that cannot be made absolute or
+    /// is not UTF-8.
     pub fn from_file(path: impl AsRef<Utf8Path>, prefix: Option<&Utf8Path>) -> Result<Self, Error> {
-        let prefix = prefix
-            .map(|p| p.as_str().trim_end_matches('/'))
-            .filter(|p| !p.is_empty())
-            .map(Utf8Path::new);
+        // An absolute root with no `.` components or trailing slash: include
+        // matches come back from the filesystem and are mapped into the root
+        // by stripping it, which only works on one spelling.
+        let prefix = match prefix.filter(|p| !p.as_str().is_empty()) {
+            Some(p) => {
+                let absolute = Utf8PathBuf::try_from(std::path::absolute(p)?)
+                    .map_err(|e| std::io::Error::new(ErrorKind::InvalidData, e))?;
+                (absolute.as_str() != "/").then_some(absolute)
+            }
+            None => None,
+        };
 
         let mut dirs = Vec::new();
-        parse_conf(path.as_ref(), prefix, &mut dirs, 0);
+        parse_conf(path.as_ref(), prefix.as_deref(), &mut dirs, 0);
         Ok(Self(dirs))
     }
 
@@ -159,43 +167,63 @@ fn expand_include(
             _ => Utf8PathBuf::from(pattern),
         }
     };
-    let glob_pattern = match prefix {
-        Some(p) => match chroot_canon(p, &pattern) {
-            Some(c) => c,
-            None => return,
-        },
-        None => pattern.clone(),
+    let Some(prefix) = prefix else {
+        for real in glob_paths(from, pattern.as_str()) {
+            parse_conf(&real, None, dirs, depth + 1);
+        }
+        return;
     };
 
-    let paths = match glob::glob(glob_pattern.as_str()) {
+    // Only the leading literal directory is resolved inside the root; the
+    // wildcard part is matched below it, and each match named back inside
+    // the root so nested includes and symlinks stay confined there.
+    let (dir, rest) = split_at_wildcard(&pattern);
+    let Some(real_dir) = chroot_canon(prefix, &dir) else {
+        return;
+    };
+    let glob_pattern = format!("{}/{rest}", glob::Pattern::escape(real_dir.as_str()));
+    for real in glob_paths(from, &glob_pattern) {
+        if let Ok(below) = real.strip_prefix(&real_dir) {
+            parse_conf(&dir.join(below), Some(prefix), dirs, depth + 1);
+        }
+    }
+}
+
+/// The UTF-8 paths matching `pattern`, in glob order; problems are warnings.
+fn glob_paths(from: &Utf8Path, pattern: &str) -> Vec<Utf8PathBuf> {
+    let paths = match glob::glob(pattern) {
         Ok(paths) => paths,
         Err(e) => {
             warn!("{}: bad include pattern {}: {}", from, pattern, e);
-            return;
+            return Vec::new();
         }
     };
-    for entry in paths {
-        let real = match entry {
-            Ok(p) => match Utf8PathBuf::try_from(p) {
-                Ok(p) => p,
-                Err(_) => continue,
-            },
+    paths
+        .filter_map(|entry| match entry {
+            Ok(p) => Utf8PathBuf::try_from(p).ok(),
             Err(e) => {
                 warn!("{}: cannot read {}: {}", from, pattern, e);
-                continue;
+                None
             }
-        };
-        // Recurse with the path inside the prefix so nested includes
-        // resolve there too.
-        let logical = match prefix {
-            Some(p) => match real.strip_prefix(p) {
-                Ok(rel) => Utf8PathBuf::from(format!("/{}", rel)),
-                Err(_) => real,
-            },
-            None => real,
-        };
-        parse_conf(&logical, prefix, dirs, depth + 1);
-    }
+        })
+        .collect()
+}
+
+/// Split `pattern` into its leading wildcard-free directory and the rest,
+/// which starts at the first component with a wildcard, or is the file name.
+fn split_at_wildcard(pattern: &Utf8Path) -> (Utf8PathBuf, String) {
+    let components: Vec<&str> = pattern.as_str().split('/').collect();
+    let cut = components
+        .iter()
+        .position(|c| c.contains(['*', '?', '[']))
+        .unwrap_or(components.len() - 1);
+    let dir = components[..cut].join("/");
+    let dir = if dir.is_empty() && pattern.as_str().starts_with('/') {
+        "/".to_owned()
+    } else {
+        dir
+    };
+    (Utf8PathBuf::from(dir), components[cut..].join("/"))
 }
 
 #[cfg(test)]
@@ -306,6 +334,73 @@ mod tests {
         let paths = SearchPaths::from_file(Utf8Path::new("/etc/ld.so.conf"), Some(&root)).unwrap();
         let dirs: Vec<&str> = paths.iter().map(|d| d.as_str()).collect();
         assert_eq!(dirs, ["/a/lib", "/nested/lib", "/opt/lib"]);
+    }
+
+    fn rooted_dirs(root: &Utf8Path) -> Vec<String> {
+        let paths = SearchPaths::from_file(Utf8Path::new("/etc/ld.so.conf"), Some(root)).unwrap();
+        paths.iter().map(|d| d.to_string()).collect()
+    }
+
+    // `ldconfig -r ./sysroot` is a natural spelling of the root.
+    #[test]
+    fn includes_survive_a_relative_root() {
+        let (_tmp, absolute) = tempdir();
+        // `./../../…/tmp/x`: the scratch root as seen from the working
+        // directory, without writing into the source tree.
+        let depth = std::env::current_dir().unwrap().components().count() - 1;
+        let root = Utf8PathBuf::from(format!(
+            "./{}{}",
+            "../".repeat(depth),
+            absolute.as_str().trim_start_matches('/')
+        ));
+        write(
+            &root.join("etc/ld.so.conf"),
+            "include ld.so.conf.d/*.conf\n",
+        );
+        write(&root.join("etc/ld.so.conf.d/a.conf"), "/a/lib\n");
+
+        assert_eq!(rooted_dirs(&root), ["/a/lib"]);
+    }
+
+    #[test]
+    fn include_wildcards_work_in_any_component_under_a_root() {
+        let (_tmp, root) = tempdir();
+        write(&root.join("etc/ld.so.conf"), "include conf.d/*/x.conf\n");
+        write(&root.join("etc/conf.d/one/x.conf"), "/one/lib\n");
+        write(&root.join("etc/conf.d/two/x.conf"), "/two/lib\n");
+
+        assert_eq!(rooted_dirs(&root), ["/one/lib", "/two/lib"]);
+    }
+
+    #[test]
+    fn a_root_path_with_glob_characters_is_taken_literally() {
+        let tmp = tempfile::Builder::new().prefix("a[b]*").tempdir().unwrap();
+        let root = Utf8PathBuf::try_from(tmp.path().to_path_buf()).unwrap();
+        write(
+            &root.join("etc/ld.so.conf"),
+            "include ld.so.conf.d/*.conf\n",
+        );
+        write(&root.join("etc/ld.so.conf.d/a.conf"), "/a/lib\n");
+
+        assert_eq!(rooted_dirs(&root), ["/a/lib"]);
+    }
+
+    #[test]
+    fn includes_cannot_leave_the_root() {
+        let (_tmp, base) = tempdir();
+        let root = base.join("root");
+        write(&base.join("outside/o.conf"), "/OUTSIDE/lib\n");
+        write(
+            &root.join("etc/ld.so.conf"),
+            "include ../../outside/*.conf\ninclude linked.d/*.conf\ninclude any.d/*/o.conf\n",
+        );
+        // A symlink out of the root, named literally and reached by a wildcard.
+        std::fs::create_dir_all(root.join("etc/any.d")).unwrap();
+        for link in ["etc/linked.d", "etc/any.d/evil"] {
+            std::os::unix::fs::symlink(base.join("outside"), root.join(link)).unwrap();
+        }
+
+        assert_eq!(rooted_dirs(&root), Vec::<String>::new());
     }
 
     #[test]

@@ -172,6 +172,14 @@ first two side by side (`path` and `real`).
 The binary resolves the configuration file, `include` patterns and the cache
 file's directory the same way, so nothing read or written can escape the root.
 
+An `include` pattern is handled in two parts. Its leading wildcard-free
+directory goes through `chroot_canon`; the rest is matched below that
+directory on the host. Each match is then named back inside the root before
+it is parsed, so a symlink reached through a wildcard is re-resolved inside
+the root like any other. `SearchPaths::from_file` makes the root absolute
+first, because that naming-back strips the root from host paths and has to
+see one spelling of it.
+
 ## Differences from glibc
 
 Intentional:
@@ -186,6 +194,10 @@ Intentional:
   `-r` is given. Here it resolves against the including file's directory
   inside the root, exactly as it does without `-r`, so a stock
   `include ld.so.conf.d/*.conf` works when a root is processed from outside.
+- **`include` wildcards in any component under a root.** glibc resolves the
+  whole pattern inside the root before expanding it, so with `-r` a wildcard
+  only works in the last component. Here `include conf.d/*/x.conf` matches
+  under a root as it does without one.
 - **`SearchPaths::from_file` omits the system directories.** Chain
   `.with_system()` to get glibc's list; the binary does.
 - **Generator string** is `ldconfig-rs <version>`.
