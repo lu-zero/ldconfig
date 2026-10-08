@@ -148,14 +148,9 @@ fn expand_include(
     dirs: &mut Vec<Utf8PathBuf>,
     depth: u32,
 ) {
-    if prefix.is_some() && !pattern.starts_with('/') {
-        warn!(
-            "{}: need absolute file name for configuration file when using -r",
-            from
-        );
-        return;
-    }
-    // Relative patterns resolve against the including file's directory.
+    // Relative patterns resolve against the including file's directory, with
+    // or without a root. glibc refuses them under -r, which drops the
+    // `include ld.so.conf.d/*.conf` every distribution config starts with.
     let pattern = if pattern.starts_with('/') {
         Utf8PathBuf::from(pattern)
     } else {
@@ -291,6 +286,26 @@ mod tests {
         let paths = SearchPaths::from_file(Utf8Path::new("/etc/ld.so.conf"), Some(&root)).unwrap();
         let dirs: Vec<&str> = paths.iter().map(|d| d.as_str()).collect();
         assert_eq!(dirs[0], "/x/lib");
+    }
+
+    // Distribution configs use `include ld.so.conf.d/*.conf`; under a root
+    // that must still pull in the files next to the including one.
+    #[test]
+    fn relative_include_resolves_inside_the_root() {
+        let (_tmp, root) = tempdir();
+        write(
+            &root.join("etc/ld.so.conf"),
+            "include ld.so.conf.d/*.conf\n/opt/lib\n",
+        );
+        write(
+            &root.join("etc/ld.so.conf.d/a.conf"),
+            "/a/lib\ninclude sub/*.conf\n",
+        );
+        write(&root.join("etc/ld.so.conf.d/sub/n.conf"), "/nested/lib\n");
+
+        let paths = SearchPaths::from_file(Utf8Path::new("/etc/ld.so.conf"), Some(&root)).unwrap();
+        let dirs: Vec<&str> = paths.iter().map(|d| d.as_str()).collect();
+        assert_eq!(dirs, ["/a/lib", "/nested/lib", "/opt/lib"]);
     }
 
     #[test]
