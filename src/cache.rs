@@ -37,20 +37,26 @@ use tracing::info;
 /// Information about the cache file
 #[derive(Debug, Clone)]
 pub struct CacheInfo {
+    /// Number of library entries in the cache.
     pub num_entries: usize,
+    /// The tool that wrote the cache, from its generator extension.
     pub generator: Option<String>,
 }
 
 /// A cache entry representing a library
 #[derive(Debug, Clone)]
 pub struct CacheEntry {
+    /// The name the dynamic loader looks up, e.g. `libz.so.1`.
     pub soname: String,
+    /// Where that name resolves, as written in the cache.
     pub path: String,
     /// Flag description as printed by ldconfig -p, e.g. "libc6,x86-64".
     pub arch: String,
+    /// Raw hwcap word: legacy hwcap bits, or the extension marker.
     pub hwcap: u64,
     /// glibc-hwcaps subdirectory name for extension entries.
     pub hwcaps: Option<String>,
+    /// Raw cache flags: library type and required ABI.
     pub flags: u32,
 }
 
@@ -104,18 +110,26 @@ impl<'a> Iterator for CacheEntries<'a> {
 
 #[bon]
 impl Cache {
+    /// Scan `search_paths` and build a cache from the libraries found.
+    ///
+    /// Like `ldconfig`, this also brings the soname symlinks in those
+    /// directories up to date and removes dangling ones, unless
+    /// `update_symlinks(false)` or `dry_run(true)` is set. Nothing is
+    /// written to the cache file until [`Cache::write_to_file`].
     #[builder]
     pub fn new(
         /// Directories to scan
         #[builder(finish_fn)]
         search_paths: &SearchPaths,
-        /// Update symlinks in directories
+        /// Create, repoint and prune soname symlinks in the scanned
+        /// directories (default: true, as `ldconfig` without `-X`)
         #[builder(default = true)]
         update_symlinks: bool,
         #[builder(default)]
-        /// Dry run mode (don't make changes)
+        /// Dry run mode: scan only, overriding `update_symlinks`
         dry_run: bool,
-        /// Root prefix
+        /// Root to operate in, like `ldconfig -r`: paths in `search_paths`
+        /// and symlinks are resolved inside it
         #[builder(into, default = "/")]
         prefix: &Utf8Path,
     ) -> Result<Self, Error> {
@@ -204,7 +218,7 @@ impl Cache {
         }
     }
 
-    /// Find entries matching a library name (returns iterator)
+    /// Entries whose soname contains `name` as a substring
     pub fn find<'a>(&'a self, name: &'a str) -> impl Iterator<Item = CacheEntry> + 'a {
         self.entries()
             .filter(move |entry| entry.soname.contains(name))
