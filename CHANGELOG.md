@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   included file without a message.
 - Under a root, an `include` pattern may have wildcards in any component, not
   only the last one (`include conf.d/*/x.conf`).
+- `ldconfig -p` no longer panics when its output is cut short, as in
+  `ldconfig -p | head` or `| grep -q`.
 - `-i` (`--ignore-aux-cache`) is accepted instead of exiting with an error.
   There is no auxiliary cache, so every run already behaves that way.
 
