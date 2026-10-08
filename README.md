@@ -1,6 +1,7 @@
 # ldconfig - Portable Rust Implementation
 
 [![LICENSE](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![docs.rs](https://img.shields.io/docsrs/ldconfig)](https://docs.rs/ldconfig)
 [![dependency status](https://deps.rs/repo/github/lu-zero/ldconfig/status.svg)](https://deps.rs/repo/github/lu-zero/ldconfig)
 
 A Rust implementation of glibc's `ldconfig`: it scans library directories,
