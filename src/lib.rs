@@ -56,3 +56,9 @@ pub use config::SearchPaths;
 #[derive(thiserror::Error, Debug)]
 #[error(transparent)]
 pub struct Error(#[from] error::Error);
+
+impl From<std::io::Error> for Error {
+    fn from(e: std::io::Error) -> Self {
+        Self(e.into())
+    }
+}

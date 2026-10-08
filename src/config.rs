@@ -1,7 +1,7 @@
 //! ld.so.conf parsing, mirroring glibc's parse_conf.
 
 use crate::chroot::chroot_canon;
-use crate::error::Error;
+use crate::Error;
 use camino::{Utf8Path, Utf8PathBuf};
 use std::fs;
 use std::io::ErrorKind;
