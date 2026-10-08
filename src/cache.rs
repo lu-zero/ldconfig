@@ -26,7 +26,7 @@
 
 use crate::cache_format::{self, flags_string, CacheInfo as InternalCacheInfo, FileEntry};
 use crate::scanner::{collect_dirs, scan_dir};
-use crate::{atomic_write, error::Error, symlinks, SearchPaths};
+use crate::{atomic_write, symlinks, Error, SearchPaths};
 use bon::bon;
 use camino::{Utf8Path, Utf8PathBuf};
 use std::fmt;
