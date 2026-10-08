@@ -80,7 +80,7 @@ Options follow glibc ldconfig:
 | `-C CACHE` | Use CACHE as cache file |
 | `-f CONF` | Use CONF as configuration file |
 | `-c FMT` | Use FMT as cache format (only `new` is supported) |
-| `-i` | Ignore auxiliary cache file (not implemented, exits with an error) |
+| `-i` | Ignore auxiliary cache file (accepted; there is none to ignore) |
 | `-l` | Interpret operands as library names (not implemented, exits with an error) |
 | `-v` | Verbose output |
 
@@ -255,7 +255,8 @@ The cache contents match glibc's. The behaviour differs in a few places:
   stock configuration can be processed from outside.
 - **Only the new cache format** (`glibc-ld.so.cache1.1`, glibc 2.2 and later)
   is read and written.
-- **No auxiliary cache**, and no library mode (`-l`).
+- **No auxiliary cache** (`-i` is accepted and changes nothing), and no
+  library mode (`-l`).
 
 [`docs/architecture.md`](docs/architecture.md) has the full list and the
 reasoning.

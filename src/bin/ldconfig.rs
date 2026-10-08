@@ -43,9 +43,9 @@ struct Options {
     /// Use FMT as cache format (only "new" supported; "old" and "compat" not implemented)
     cache_format: Option<String>,
 
-    #[bpaf(short('i'))]
-    /// Ignore auxiliary cache file (not implemented, present for compatibility)
-    ignore_aux_cache: bool,
+    #[bpaf(short('i'), long("ignore-aux-cache"))]
+    /// Ignore auxiliary cache file (always the case: there is none)
+    _ignore_aux_cache: bool,
 
     #[bpaf(short('l'))]
     /// Interpret operands as library names (not implemented, present for compatibility)
@@ -115,9 +115,6 @@ fn run() -> Result<(), Error> {
         die(format_args!(
             "cache format '{fmt}' not supported (only new format is implemented)"
         ));
-    }
-    if options.ignore_aux_cache {
-        die("-i (ignore auxiliary cache) is not implemented");
     }
     if options.library_mode {
         die("-l (library mode) is not implemented");
