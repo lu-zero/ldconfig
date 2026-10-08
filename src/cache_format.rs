@@ -271,8 +271,10 @@ pub(crate) fn parse_cache(data: &[u8]) -> Result<CacheInfo, Error> {
                         }
                         TAG_GLIBC_HWCAPS => {
                             hwcaps_array = data[off..off + size]
-                                .chunks_exact(4)
-                                .map(|b| u32::from_ne_bytes(b.try_into().unwrap()))
+                                .as_chunks::<4>()
+                                .0
+                                .iter()
+                                .map(|b| u32::from_ne_bytes(*b))
                                 .collect();
                         }
                         _ => debug!("ignoring unknown cache extension tag {}", tag),
