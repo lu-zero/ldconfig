@@ -205,7 +205,9 @@ fn read_u64(data: &[u8], offset: usize) -> Option<u64> {
         .map(|b| u64::from_ne_bytes(b.try_into().unwrap()))
 }
 
-fn read_string(data: &[u8], offset: usize) -> Option<String> {
+/// The NUL-terminated string at `offset`; bytes that are not UTF-8 are
+/// replaced.
+pub(crate) fn read_string(data: &[u8], offset: usize) -> Option<String> {
     let bytes = data.get(offset..)?;
     let nul = bytes.iter().position(|&b| b == 0)?;
     Some(String::from_utf8_lossy(&bytes[..nul]).into_owned())

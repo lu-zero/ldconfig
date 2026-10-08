@@ -8,10 +8,4 @@ pub enum Error {
 
     #[error("Invalid cache file: {0}")]
     InvalidCache(&'static str),
-
-    #[error("Invalid cache offset: {0}")]
-    InvalidCacheOffset(u32),
-
-    #[error("Invalid UTF-8 in cache string")]
-    InvalidCacheUtf8,
 }
