@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-08
+
 ### Fixed
 
 - A relative `include` in `ld.so.conf` is honoured under a root (`-r`, or a
@@ -22,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ldconfig -p | head` or `| grep -q`.
 - `-i` (`--ignore-aux-cache`) is accepted instead of exiting with an error.
   There is no auxiliary cache, so every run already behaves that way.
+
+### Changed
+
+- `SearchPaths::from_file` makes the root absolute before use, and returns an
+  error if that fails or the result is not UTF-8. It never returned one
+  before.
 
 ## [0.2.0] - 2026-10-08
 
