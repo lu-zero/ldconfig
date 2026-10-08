@@ -140,7 +140,7 @@ fn machine_flags(h: &Header, is_64: bool) -> Option<u32> {
                 } else if h.e_flags & EF_ARM_ABI_FLOAT_SOFT != 0 {
                     Some(FLAG_ARM_LIBSF | FLAG_ELF_LIBC6)
                 } else {
-                    // Unmarked objects are compatible with all ABI variants.
+                    // No float ABI recorded: usable from either variant.
                     Some(FLAG_ELF_LIBC6)
                 }
             } else {

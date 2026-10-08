@@ -126,12 +126,12 @@ impl Cache {
         let mut entries = Vec::new();
         for dir in &dirs {
             for lib in scan_dir(dir, &prefix, update_links) {
-                // The cached file name is the soname for regular
-                // directories (relying on the symlink), the actual file
-                // for glibc-hwcaps subdirectories (search_dir).
+                // Regular directories are cached under the soname, so the
+                // entry survives a file rename as long as the link follows;
+                // glibc-hwcaps ones name the file itself (search_dir).
                 let value_name = match &dir.hwcaps {
                     None => {
-                        // Don't create links to links.
+                        // A winner that is itself a link needs no link.
                         if update_links && !lib.is_link {
                             symlinks::create_link(
                                 &prefix,

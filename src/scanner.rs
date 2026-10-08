@@ -100,7 +100,7 @@ pub(crate) fn collect_dirs(dirs: &[Utf8PathBuf], prefix: &Utf8Path) -> Vec<ScanD
             let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
                 continue;
             };
-            // Names with ':' cannot be looked up by the dynamic loader.
+            // ld.so splits its hwcaps list on ':', so such a name is unreachable.
             if name.starts_with('.') || name.contains(':') {
                 continue;
             }

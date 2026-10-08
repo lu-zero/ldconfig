@@ -1,5 +1,5 @@
-//! Path canonicalization inside an alternate root, port of glibc's
-//! elf/chroot_canon.c.
+//! Path canonicalization inside an alternate root, with the behaviour of
+//! glibc's elf/chroot_canon.c.
 
 use camino::{Utf8Path, Utf8PathBuf};
 use std::fs;
