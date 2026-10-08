@@ -182,6 +182,10 @@ Intentional:
   temporary name is neither scanned as a library nor swept as a stale link.
 - **Every architecture in one binary.** glibc's `ldconfig` only knows the
   machine it was built for.
+- **Relative `include` under a root.** glibc refuses a relative pattern when
+  `-r` is given. Here it resolves against the including file's directory
+  inside the root, exactly as it does without `-r`, so a stock
+  `include ld.so.conf.d/*.conf` works when a root is processed from outside.
 - **`SearchPaths::from_file` omits the system directories.** Chain
   `.with_system()` to get glibc's list; the binary does.
 - **Generator string** is `ldconfig-rs <version>`.

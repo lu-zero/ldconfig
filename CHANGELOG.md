@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A relative `include` in `ld.so.conf` is honoured under a root (`-r`, or a
+  `prefix`): it resolves against the including file's directory inside the
+  root. It used to be skipped with a warning, so a root with the usual
+  `include ld.so.conf.d/*.conf` lost every directory listed there.
+
 ## [0.2.0] - 2026-10-08
 
 ### Added
