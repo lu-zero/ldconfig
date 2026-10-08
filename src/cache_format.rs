@@ -352,50 +352,40 @@ pub(crate) fn flags_string(flags: u32) -> String {
     s
 }
 
-/// Numeric-aware string comparison matching glibc's `_dl_cache_libcmp`.
-/// Digits sort after non-digits; runs of digits compare numerically.
+/// Soname order of the cache, the one `ld.so` binary-searches (glibc's
+/// `_dl_cache_libcmp`): runs of digits compare as numbers, and a digit sorts
+/// after any other byte.
 pub(crate) fn dl_cache_libcmp(p1: &str, p2: &str) -> Ordering {
-    let b1 = p1.as_bytes();
-    let b2 = p2.as_bytes();
-    let mut i = 0;
-    let mut j = 0;
-
-    while i < b1.len() {
-        if b1[i].is_ascii_digit() {
-            if j < b2.len() && b2[j].is_ascii_digit() {
-                // Both digits: compare numerically.
-                let mut val1: i64 = 0;
-                let mut val2: i64 = 0;
-                while i < b1.len() && b1[i].is_ascii_digit() {
-                    val1 = val1
-                        .saturating_mul(10)
-                        .saturating_add((b1[i] - b'0') as i64);
-                    i += 1;
+    let starts_with_digit = |s: &[u8]| s.first().is_some_and(u8::is_ascii_digit);
+    let (mut a, mut b) = (p1.as_bytes(), p2.as_bytes());
+    loop {
+        match (starts_with_digit(a), starts_with_digit(b)) {
+            (true, true) => {
+                let (x, y);
+                (x, a) = take_number(a);
+                (y, b) = take_number(b);
+                if x != y {
+                    return x.cmp(&y);
                 }
-                while j < b2.len() && b2[j].is_ascii_digit() {
-                    val2 = val2
-                        .saturating_mul(10)
-                        .saturating_add((b2[j] - b'0') as i64);
-                    j += 1;
-                }
-                if val1 != val2 {
-                    return val1.cmp(&val2);
-                }
-            } else {
-                // p1 digit, p2 non-digit: digits sort after non-digits.
-                return Ordering::Greater;
             }
-        } else if j < b2.len() && b2[j].is_ascii_digit() {
-            return Ordering::Less;
-        } else if j >= b2.len() || b1[i] != b2[j] {
-            return b1.get(i).unwrap_or(&0).cmp(b2.get(j).unwrap_or(&0));
-        } else {
-            i += 1;
-            j += 1;
+            (true, false) => return Ordering::Greater,
+            (false, true) => return Ordering::Less,
+            (false, false) => match (a.split_first(), b.split_first()) {
+                (Some((x, rest_a)), Some((y, rest_b))) if x == y => (a, b) = (rest_a, rest_b),
+                // A name that ends here sorts before a longer one.
+                _ => return a.first().cmp(&b.first()),
+            },
         }
     }
-    // p1 ended: compare NUL (0) vs p2's current char.
-    0u8.cmp(b2.get(j).unwrap_or(&0))
+}
+
+/// Split a leading run of ASCII digits off `s`, as a saturating number.
+fn take_number(s: &[u8]) -> (u64, &[u8]) {
+    let len = s.iter().take_while(|b| b.is_ascii_digit()).count();
+    let value = s[..len].iter().fold(0u64, |n, b| {
+        n.saturating_mul(10).saturating_add(u64::from(b - b'0'))
+    });
+    (value, &s[len..])
 }
 
 #[cfg(test)]
