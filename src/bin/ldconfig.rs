@@ -101,8 +101,9 @@ fn print_cache(cache_path: &Utf8Path) -> Result<(), Error> {
         out.flush()
     })();
     match written {
-        // The reader went away (`ldconfig -p | head`): not an error.
-        Err(e) if e.kind() == ErrorKind::BrokenPipe => Ok(()),
+        // Rust ignores SIGPIPE, so a closed stdout is EPIPE rather than the
+        // signal that ends glibc's ldconfig. Same status, and no error line.
+        Err(e) if e.kind() == ErrorKind::BrokenPipe => std::process::exit(141),
         other => Ok(other?),
     }
 }

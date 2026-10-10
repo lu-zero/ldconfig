@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A 32-bit LoongArch object is left out of the cache. It was stored with
   the LP64 float-ABI flag. glibc only caches ELF64 LoongArch.
+- `ldconfig -p` exits 141 when its output is cut short (`| head`), as
+  glibc does. The 0.2.1 change stopped the panic and reported success.
 
 ## [0.2.1] - 2026-10-08
 
