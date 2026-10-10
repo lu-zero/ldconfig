@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A 32-bit LoongArch object is left out of the cache. It was stored with
+  the LP64 float-ABI flag. glibc only caches ELF64 LoongArch.
+
 ## [0.2.1] - 2026-10-08
 
 ### Fixed

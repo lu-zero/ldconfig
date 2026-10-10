@@ -161,6 +161,10 @@ fn machine_flags(h: &Header, is_64: bool) -> Option<u32> {
             }
         }
         EM_LOONGARCH => {
+            // glibc's LoongArch ldconfig only has an ELF64 processor.
+            if !is_64 {
+                return None;
+            }
             // Some binutils set OBJABI_V1 on shared objects; it only matters
             // to static linking.
             let flags = h.e_flags & !EF_LARCH_OBJABI_V1;
@@ -345,6 +349,9 @@ mod tests {
         );
         assert_eq!(flags_for(EM_LOONGARCH, true, 0x02), None);
         assert_eq!(flags_for(EM_LOONGARCH, true, 0x83), None);
+        // Same float ABI, ELF32: not cached.
+        assert_eq!(flags_for(EM_LOONGARCH, false, 0x03), None);
+        assert_eq!(flags_for(EM_LOONGARCH, false, 0x01), None);
     }
 
     #[test]
